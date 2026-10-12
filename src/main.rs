@@ -295,12 +295,60 @@ fn handle_track(
                 "Clean".green()
             }
         );
+
+        match install_post_commit_hook(&canonical_path) {
+            Ok(Some(hook_path)) => {
+                println!("  • Git Hook: Installed at {}", hook_path.display().to_string().cyan());
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("  • Git Hook: Warning: could not install post-commit hook: {}", e);
+            }
+        }
     } else {
         println!("\n{}", "Git Repository: Not a git repository".dimmed());
     }
 
     println!();
     Ok(())
+}
+
+fn install_post_commit_hook(repo_root: &Path) -> Result<Option<PathBuf>> {
+    let git_dir = repo_root.join(".git");
+    if !git_dir.exists() {
+        return Ok(None);
+    }
+    let hooks_dir = if git_dir.is_dir() {
+        git_dir.join("hooks")
+    } else {
+        return Ok(None);
+    };
+
+    fs::create_dir_all(&hooks_dir)?;
+    let hook_path = hooks_dir.join("post-commit");
+    let hook_content = "#!/bin/sh\ncae record-commit\n";
+    fs::write(&hook_path, hook_content)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755));
+    }
+
+    Ok(Some(hook_path))
+}
+
+fn remove_post_commit_hook(repo_root: &Path) -> Result<bool> {
+    let hook_path = repo_root.join(".git").join("hooks").join("post-commit");
+    if hook_path.exists() {
+        if let Ok(content) = fs::read_to_string(&hook_path) {
+            if content.contains("cae record-commit") {
+                fs::remove_file(&hook_path)?;
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 // -----------------------------------------------------------------------------
@@ -329,6 +377,11 @@ fn handle_untrack(target: &str) -> Result<()> {
             }
         }
     };
+
+    let repo_path = Path::new(&ledger.canonical_path);
+    if let Ok(true) = remove_post_commit_hook(repo_path) {
+        println!("  Removed git hook: .git/hooks/post-commit");
+    }
 
     match delete_ledger(&ledger.id)? {
         Some(path) => {
