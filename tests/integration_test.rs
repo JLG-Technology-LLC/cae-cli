@@ -74,6 +74,25 @@ Decisions made during development.
 
     let bin_path = env!("CARGO_BIN_EXE_cae");
 
+    // 0. cae dir & cae status --dir
+    let dir_output = Command::new(bin_path)
+        .arg("dir")
+        .output()
+        .expect("Failed to run cae dir");
+    assert!(dir_output.status.success());
+    let dir_stdout = String::from_utf8_lossy(&dir_output.stdout).trim().to_string();
+    assert!(dir_stdout.ends_with("projects"));
+
+    let status_dir_output = Command::new(bin_path)
+        .args(["status", "--dir"])
+        .output()
+        .expect("Failed to run cae status --dir");
+    assert!(status_dir_output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&status_dir_output.stdout).trim(),
+        dir_stdout
+    );
+
     // 1. cae track
     let track_output = Command::new(bin_path)
         .arg("track")
