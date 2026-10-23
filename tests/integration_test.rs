@@ -1,8 +1,9 @@
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 #[test]
-fn test_cli_end_to_end() {
+fn test_cli_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = std::env::temp_dir().join(format!("cae_test_{}", std::process::id()));
     if temp_dir.exists() {
         let _ = fs::remove_dir_all(&temp_dir);
@@ -76,12 +77,12 @@ Decisions made during development.
 
     // 0. cae dir & cae status --dir
     let dir_output = Command::new(bin_path)
-        .arg("dir")
-        .output()
-        .expect("Failed to run cae dir");
+    .arg("dir")
+    .output()?;
     assert!(dir_output.status.success());
     let dir_stdout = String::from_utf8_lossy(&dir_output.stdout).trim().to_string();
     assert!(dir_stdout.ends_with("projects"));
+    assert!(Path::new(&dir_stdout).exists(), "Directory does not exist: {}", dir_stdout);
 
     let status_dir_output = Command::new(bin_path)
         .args(["status", "--dir"])

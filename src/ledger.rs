@@ -25,11 +25,10 @@ pub struct ProjectLedger {
 
 /// Normalize a home directory path, stripping macOS App Sandbox container suffixes if present.
 pub fn normalize_home_dir(home: PathBuf) -> PathBuf {
-    let home_str = home.to_string_lossy();
-    if let Some(idx) = home_str.find("/Library/Containers/") {
-        let base = &home_str[..idx];
-        if !base.is_empty() {
-            return PathBuf::from(base);
+    // Use Path APIs to avoid converting to a string and back.
+    if let Some(parent) = home.parent() {
+        if home.ends_with("Library/Containers") {
+            return parent.to_path_buf();
         }
     }
     home
@@ -40,7 +39,11 @@ pub fn get_ledger_dir() -> Result<PathBuf> {
     let dir = if let Some(custom_dir) =
         std::env::var_os("CAE_PROJECTS_DIR").filter(|v| !v.is_empty())
     {
-        PathBuf::from(custom_dir)
+        let custom_path = PathBuf::from(custom_dir);
+        if !custom_path.is_absolute() {
+            return Err(anyhow::anyhow!("CAE_PROJECTS_DIR must be an absolute path"));
+        }
+        custom_path
     } else {
         let raw_home = dirs::home_dir().context("Could not determine user home directory")?;
         let home = normalize_home_dir(raw_home);
