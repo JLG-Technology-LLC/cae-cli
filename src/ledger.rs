@@ -23,10 +23,29 @@ pub struct ProjectLedger {
     pub notes: Option<String>,
 }
 
+/// Normalize a home directory path, stripping macOS App Sandbox container suffixes if present.
+pub fn normalize_home_dir(home: PathBuf) -> PathBuf {
+    let home_str = home.to_string_lossy();
+    if let Some(idx) = home_str.find("/Library/Containers/") {
+        let base = &home_str[..idx];
+        if !base.is_empty() {
+            return PathBuf::from(base);
+        }
+    }
+    home
+}
+
 /// Directory where project ledgers are stored: ~/.cae/projects/
 pub fn get_ledger_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine user home directory")?;
-    let dir = home.join(".cae").join("projects");
+    let dir = if let Some(custom_dir) =
+        std::env::var_os("CAE_PROJECTS_DIR").filter(|v| !v.is_empty())
+    {
+        PathBuf::from(custom_dir)
+    } else {
+        let raw_home = dirs::home_dir().context("Could not determine user home directory")?;
+        let home = normalize_home_dir(raw_home);
+        home.join(".cae").join("projects")
+    };
     if !dir.exists() {
         fs::create_dir_all(&dir)
             .with_context(|| format!("Creating ledger directory at {}", dir.display()))?;
@@ -192,5 +211,19 @@ mod tests {
         assert_eq!(sanitize_project_id("FastAPI Agent"), "fastapi-agent");
         assert_eq!(sanitize_project_id("career_asset_engine"), "career-asset-engine");
         assert_eq!(sanitize_project_id("my...cool_project!"), "my-cool-project");
+    }
+
+    #[test]
+    fn test_normalize_home_dir() {
+        let sandboxed = PathBuf::from(
+            "/Users/jlgtechnology/Library/Containers/com.careerengine.careerAssetEngine/Data",
+        );
+        assert_eq!(
+            normalize_home_dir(sandboxed),
+            PathBuf::from("/Users/jlgtechnology")
+        );
+
+        let normal = PathBuf::from("/Users/jlgtechnology");
+        assert_eq!(normalize_home_dir(normal.clone()), normal);
     }
 }

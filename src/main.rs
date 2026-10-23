@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::context::extract_agent_context;
 use crate::git::{get_commit_record, inspect_git_status};
 use crate::ledger::{
-    delete_ledger, find_ledger, find_ledger_for_current_dir, list_all_ledgers,
+    delete_ledger, find_ledger, find_ledger_for_current_dir, get_ledger_dir, list_all_ledgers,
     sanitize_project_id, save_ledger, ProjectLedger,
 };
 use crate::manifest::detect_and_parse_manifests;
@@ -72,7 +72,15 @@ enum Commands {
         /// Output raw JSON format
         #[arg(long)]
         json: bool,
+
+        /// Print the directory where tracked project files are stored
+        #[arg(long)]
+        dir: bool,
     },
+
+    /// Print the directory where tracked project ledger files are stored
+    #[command(visible_alias = "path")]
+    Dir,
 
     /// Record a git commit into the project ledger
     RecordCommit {
@@ -108,7 +116,20 @@ fn main() -> Result<()> {
 
         Commands::Untrack { target } => handle_untrack(&target),
 
-        Commands::Status { target, all, json } => handle_status(target, all, json),
+        Commands::Status {
+            target,
+            all,
+            json,
+            dir,
+        } => {
+            if dir {
+                handle_dir()
+            } else {
+                handle_status(target, all, json)
+            }
+        }
+
+        Commands::Dir => handle_dir(),
 
         Commands::RecordCommit {
             project,
@@ -117,6 +138,12 @@ fn main() -> Result<()> {
             commit,
         } => handle_record_commit(project, message, note, commit),
     }
+}
+
+fn handle_dir() -> Result<()> {
+    let dir = get_ledger_dir()?;
+    println!("{}", dir.display());
+    Ok(())
 }
 
 // -----------------------------------------------------------------------------
