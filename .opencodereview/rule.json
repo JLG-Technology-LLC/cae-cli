@@ -1,0 +1,35 @@
+{
+  "include": [
+    "src/**/*.rs",
+    "tests/**/*.rs",
+    "Cargo.toml",
+    "*.md"
+  ],
+  "exclude": [
+    "target/**",
+    "Cargo.lock",
+    ".git/**"
+  ],
+  "rules": [
+    {
+      "path": "src/**/*.rs",
+      "merge_system_rule": true,
+      "rule": "1. Rust Code Quality (BLOCKING)\n- Use `clap` derive for CLI args, enforce `Result` handling, avoid `unwrap`/`expect`.\n- `unsafe` blocks prohibited unless justified.\n- Enforce `#[deny(dead_code, warnings)]` and `clippy` linting.\n- All public functions must have doc comments.\n- Ensure error handling uses `anyhow::Context`.\n2. Dependency Management (BLOCKING)\n- Keep dependencies up‑to‑date, no unused crates.\n- Pin versions where needed.\n3. Security (BLOCKING)\n- No hardcoded secrets, no inclusion of private keys.\n- Validate all external inputs and sanitize before logging."
+    },
+    {
+      "path": "tests/**/*.rs",
+      "merge_system_rule": true,
+      "rule": "1. Test Standards (BLOCKING)\n- Use `#[test]` functions with clear Arrange‑Act‑Assert pattern.\n- Avoid `unwrap` in tests; prefer `Result` return.\n- Ensure test coverage ≥ 80%.\n- Mocks must faithfully implement production interfaces without missing methods."
+    },
+    {
+      "path": "Cargo.toml",
+      "merge_system_rule": true,
+      "rule": "1. Manifest Integrity (BLOCKING)\n- `edition` must be at least 2021.\n- All dependencies must have explicit version constraints; avoid wildcard `*`.\n- No optional dependencies without justification."
+    },
+    {
+      "path": "*.md",
+      "merge_system_rule": true,
+      "rule": "1. Documentation (BLOCKING)\n- Top‑level headings must start with `#` and include the project name.\n- Code snippets must be fenced with the appropriate language identifier.\n- Documentation should be up‑to‑date with code changes."
+    }
+  ]
+}
