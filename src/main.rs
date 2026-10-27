@@ -79,8 +79,7 @@ enum Commands {
     },
 
     /// Print the directory where tracked project ledger files are stored
-    #[command(visible_alias = "path")]
-    Dir,
+
 
     /// Record a git commit into the project ledger
     RecordCommit {
@@ -129,7 +128,7 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Dir => handle_dir(),
+
 
         Commands::RecordCommit {
             project,
@@ -141,7 +140,8 @@ fn main() -> Result<()> {
 }
 
 fn handle_dir() -> Result<()> {
-    let dir = get_ledger_dir()?;
+    let dir = get_ledger_dir()
+        .with_context(|| "Failed to retrieve ledger directory")?;
     println!("{}", dir.display());
     Ok(())
 }
