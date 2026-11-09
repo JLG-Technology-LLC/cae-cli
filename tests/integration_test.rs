@@ -13,23 +13,23 @@ fn test_cli_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
     if temp_projects_dir.exists() {
         let _ = fs::remove_dir_all(&temp_projects_dir);
     }
-    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
-    fs::create_dir_all(&temp_projects_dir).expect("Failed to create temp projects dir");
+    fs::create_dir_all(&temp_dir)?;
+    fs::create_dir_all(&temp_projects_dir)?;
     std::env::set_var("CAE_PROJECTS_DIR", &temp_projects_dir);
 
     // Initialize a git repo in temp_dir
-    let run = |cmd: &str, args: &[&str]| {
+    let run = |cmd: &str, args: &[&str]| -> Result<(), Box<dyn std::error::Error>> {
         let status = Command::new(cmd)
             .args(args)
             .current_dir(&temp_dir)
-            .status()
-            .expect("Failed to execute command");
+            .status()?;
         assert!(status.success());
+        Ok(())
     };
 
-    run("git", &["init"]);
-    run("git", &["config", "user.name", "Test User"]);
-    run("git", &["config", "user.email", "test@example.com"]);
+    run("git", &["init"])?;
+    run("git", &["config", "user.name", "Test User"])?;
+    run("git", &["config", "user.email", "test@example.com"])?;
 
     // Create manifest files
     let cargo_toml = r#"
@@ -41,7 +41,7 @@ edition = "2021"
 [dependencies]
 serde = "1.0"
 "#;
-    fs::write(temp_dir.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(temp_dir.join("Cargo.toml"), cargo_toml)?;
 
     let package_json = r#"{
   "name": "test-node",
@@ -50,7 +50,7 @@ serde = "1.0"
     "lodash": "^4.17.21"
   }
 }"#;
-    fs::write(temp_dir.join("package.json"), package_json).expect("write package.json");
+    fs::write(temp_dir.join("package.json"), package_json)?;
 
     // Create agent context files
     let arch_md = r#"# Architecture Document
@@ -59,26 +59,26 @@ This describes the system architecture.
 ## Component Overview
 Details here.
 "#;
-    fs::write(temp_dir.join("ARCHITECTURE.md"), arch_md).expect("write ARCHITECTURE.md");
+    fs::write(temp_dir.join("ARCHITECTURE.md"), arch_md)?;
 
     let readme_md = r#"# Readme
 Welcome to the test project.
 "#;
-    fs::write(temp_dir.join("README.md"), readme_md).expect("write README.md");
+    fs::write(temp_dir.join("README.md"), readme_md)?;
 
     let design_md = r#"# Design Specs
 Design patterns used in this app.
 "#;
-    fs::write(temp_dir.join("DESIGN.md"), design_md).expect("write DESIGN.md");
+    fs::write(temp_dir.join("DESIGN.md"), design_md)?;
 
     let memory_md = r#"# Agent Memory
 Decisions made during development.
 "#;
-    fs::write(temp_dir.join("MEMORY.md"), memory_md).expect("write MEMORY.md");
+    fs::write(temp_dir.join("MEMORY.md"), memory_md)?;
 
     // Commit files in git
-    run("git", &["add", "."]);
-    run("git", &["commit", "-m", "Initial test commit"]);
+    run("git", &["add", "."])?;
+    run("git", &["commit", "-m", "Initial test commit"])?;
 
     let bin_path = env!("CARGO_BIN_EXE_cae");
 
@@ -95,10 +95,7 @@ Decisions made during development.
         dir_stdout
     );
 
-    let status_dir_output = Command::new(bin_path)
-        .args(["status", "--dir"])
-        .output()
-        .expect("Failed to run cae status --dir");
+    let status_dir_output = Command::new(bin_path).args(["status", "--dir"]).output()?;
     assert!(status_dir_output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&status_dir_output.stdout).trim(),
@@ -111,8 +108,7 @@ Decisions made during development.
         .arg(&temp_dir)
         .arg("--id")
         .arg("test-integration-proj")
-        .output()
-        .expect("Failed to run cae track");
+        .output()?;
 
     assert!(
         track_output.status.success(),
@@ -133,8 +129,7 @@ Decisions made during development.
         .arg("status")
         .arg("test-integration-proj")
         .arg("--json")
-        .output()
-        .expect("Failed to run cae status --json");
+        .output()?;
 
     assert!(status_output.status.success());
     let json_str = String::from_utf8_lossy(&status_output.stdout);
@@ -149,8 +144,7 @@ Decisions made during development.
         .arg("test-integration-proj")
         .arg("--note")
         .arg("Integration test note")
-        .output()
-        .expect("Failed to run cae record-commit");
+        .output()?;
 
     assert!(record_output.status.success());
     let record_stdout = String::from_utf8_lossy(&record_output.stdout);
@@ -161,8 +155,7 @@ Decisions made during development.
     let status2_output = Command::new(bin_path)
         .arg("status")
         .arg("test-integration-proj")
-        .output()
-        .expect("Failed to run cae status");
+        .output()?;
     let status2_stdout = String::from_utf8_lossy(&status2_output.stdout);
     assert!(status2_stdout.contains("Recorded Commits in Ledger (1)"));
     assert!(status2_stdout.contains("Integration test note"));
@@ -171,8 +164,7 @@ Decisions made during development.
     let untrack_output = Command::new(bin_path)
         .arg("untrack")
         .arg("test-integration-proj")
-        .output()
-        .expect("Failed to run cae untrack");
+        .output()?;
 
     assert!(untrack_output.status.success());
     let untrack_stdout = String::from_utf8_lossy(&untrack_output.stdout);

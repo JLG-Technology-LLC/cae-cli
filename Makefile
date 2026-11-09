@@ -22,7 +22,7 @@ trivy-scan:
 	@if command -v trivy >/dev/null 2>&1; then \
 		trivy fs . --scanners vuln,secret,misconfig --severity CRITICAL,HIGH --ignore-unfixed --skip-dirs target --exit-code 1; \
 	else \
-		docker run --rm -v "$(PWD):/workspace" -w /workspace aquasec/trivy:latest fs . --scanners vuln,secret,misconfig --severity CRITICAL,HIGH --ignore-unfixed --skip-dirs target --exit-code 1; \
+		docker run --rm -v "$(CURDIR):/workspace" -w /workspace aquasec/trivy:latest fs . --scanners vuln,secret,misconfig --severity CRITICAL,HIGH --ignore-unfixed --skip-dirs target --exit-code 1; \
 	fi
 
 clean:
