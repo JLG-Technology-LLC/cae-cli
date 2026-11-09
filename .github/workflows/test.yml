@@ -1,0 +1,110 @@
+name: Rust CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+  pull_request:
+    branches:
+      - staging
+      - dev
+  schedule:
+    - cron: "30 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-ci:
+    name: Format, Clippy & Hermetic Tests (Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install Rust Stable Toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo Registry & Build Artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
+
+      - name: Verify Rustfmt Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy Lints
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run Hermetic Unit & Integration Tests
+        run: cargo test --all-targets --all-features
+
+  trivy-fs:
+    name: Trivy Filesystem Scan (Cargo Vuln, Secret & Misconfig)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Generate Trivy JSON Report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          version: "latest"
+          scan-type: "fs"
+          scan-ref: "."
+          scanners: "vuln,secret,misconfig"
+          ignore-unfixed: true
+          severity: "CRITICAL,HIGH"
+          skip-dirs: "target"
+          format: "json"
+          output: "trivy-fs-report.json"
+          exit-code: "0"
+
+      - name: Upload Trivy Vulnerability Report Artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: trivy-cae-cli-fs-report
+          path: trivy-fs-report.json
+          retention-days: 30
+
+      - name: Run Trivy Gate & Capture Table Summary
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          scanners: "vuln,secret,misconfig"
+          ignore-unfixed: true
+          severity: "CRITICAL,HIGH"
+          skip-dirs: "target"
+          format: "table"
+          output: "trivy-fs.txt"
+          exit-code: "1"
+          skip-setup-trivy: true
+
+      - name: Publish Trivy Output to Job Summary
+        if: always()
+        run: |
+          if [[ -s trivy-fs.txt ]]; then
+            {
+              echo "### Trivy Security Scan (cae-cli)"
+              echo "<details><summary>Click to expand scan report</summary>"
+              echo ""
+              echo '```text'
+              cat trivy-fs.txt
+              echo '```'
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

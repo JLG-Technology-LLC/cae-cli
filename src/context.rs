@@ -50,7 +50,10 @@ pub fn extract_agent_context(root: &Path) -> Vec<ContextFile> {
     for path in candidate_paths {
         if let Ok(file_info) = process_context_file(&path, root) {
             // Avoid duplicate relative paths
-            if !context_files.iter().any(|c: &ContextFile| c.relative_path == file_info.relative_path) {
+            if !context_files
+                .iter()
+                .any(|c: &ContextFile| c.relative_path == file_info.relative_path)
+            {
                 context_files.push(file_info);
             }
         }
@@ -107,7 +110,8 @@ fn is_context_file_name(name: &str) -> bool {
         .unwrap_or("")
         .to_lowercase();
 
-    let valid_ext = ext.is_empty() || ext == "md" || ext == "markdown" || ext == "txt" || ext == "json";
+    let valid_ext =
+        ext.is_empty() || ext == "md" || ext == "markdown" || ext == "txt" || ext == "json";
 
     if !valid_ext {
         return false;
@@ -150,13 +154,10 @@ pub fn process_context_file(file_path: &Path, root: &Path) -> Result<ContextFile
     let sha256 = hex::encode(hasher.finalize());
 
     // Compute last modified time
-    let last_modified = metadata
-        .modified()
-        .ok()
-        .map(|st| {
-            let dt: DateTime<Utc> = st.into();
-            dt.to_rfc3339()
-        });
+    let last_modified = metadata.modified().ok().map(|st| {
+        let dt: DateTime<Utc> = st.into();
+        dt.to_rfc3339()
+    });
 
     let relative_path = file_path
         .strip_prefix(root)
@@ -279,7 +280,10 @@ Details on services here.
 Details on models here.
 "#;
         let headings = extract_headings(markdown);
-        assert_eq!(headings, vec!["Main Architecture", "Services", "Data Model"]);
+        assert_eq!(
+            headings,
+            vec!["Main Architecture", "Services", "Data Model"]
+        );
 
         let summary = extract_summary(markdown);
         assert!(summary.is_some());
@@ -288,9 +292,21 @@ Details on models here.
 
     #[test]
     fn test_classify_context_type() {
-        assert_eq!(classify_context_type("ARCHITECTURE.md", "ARCHITECTURE.md"), ContextType::Architecture);
-        assert_eq!(classify_context_type("README.md", "README.md"), ContextType::Readme);
-        assert_eq!(classify_context_type("DESIGN.md", "docs/DESIGN.md"), ContextType::Design);
-        assert_eq!(classify_context_type("session.md", "memory/session.md"), ContextType::Memory);
+        assert_eq!(
+            classify_context_type("ARCHITECTURE.md", "ARCHITECTURE.md"),
+            ContextType::Architecture
+        );
+        assert_eq!(
+            classify_context_type("README.md", "README.md"),
+            ContextType::Readme
+        );
+        assert_eq!(
+            classify_context_type("DESIGN.md", "docs/DESIGN.md"),
+            ContextType::Design
+        );
+        assert_eq!(
+            classify_context_type("session.md", "memory/session.md"),
+            ContextType::Memory
+        );
     }
 }

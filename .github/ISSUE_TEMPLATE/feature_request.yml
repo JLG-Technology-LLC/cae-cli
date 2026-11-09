@@ -1,0 +1,64 @@
+name: Feature Request
+description: Propose a new CLI subcommand, manifest parser, or ledger feature for cae-cli
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a feature! Issues start with `needs-triage`.
+        For substantial CLI or ledger changes, run the **Spec Kit `assess` pipeline** (`/speckit-assess-intake` → `research` → `define` → `shape` → `decide`) and **Core SDD** (`/speckit-specify` → `/speckit-plan` → `/speckit-tasks`) against `.specify/memory/constitution.md`.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What project tracking, manifest parsing, or agent context extraction problem does this solve?
+      placeholder: "When tracking workspaces with multiple ecosystems..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the CLI flags, human-readable output, `--json` contract, and ledger schema impact.
+      placeholder: "Add `cae ...` flag supporting both terminal and `--json` output..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What alternative CLI designs or schema structures were considered?
+      placeholder: "Considered a separate subcommand vs. flag on `cae status`..."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which module of `cae-cli` is primarily affected?
+      options:
+        - "CLI Subcommands & Args (`src/main.rs`)"
+        - "Ecosystem Manifest Parsers (`src/manifest.rs`)"
+        - "Agent Context Extractor (`src/context.rs`)"
+        - "Git State & History (`src/git.rs`)"
+        - "Local JSON Ledger (`src/ledger.rs`, `src/models.rs`)"
+        - "CI / Release / Packaging"
+        - "Spec Kit / Agentic Workflows"
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_cases
+    attributes:
+      label: Use Cases & Acceptance Criteria
+      description: Concrete CLI invocations and hermetic tempdir test criteria.
+      placeholder: |
+        1. `cae <cmd> --json` emits valid JSON backward-compatible with `~/.cae/projects/<id>.json`.
+        2. Tested hermetically in `tests/` using `tempfile` without touching live `~/.cae/`.
+    validations:
+      required: true
