@@ -5,10 +5,17 @@ use std::process::Command;
 #[test]
 fn test_cli_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = std::env::temp_dir().join(format!("cae_test_{}", std::process::id()));
+    let temp_projects_dir =
+        std::env::temp_dir().join(format!("cae_test_projects_{}", std::process::id()));
     if temp_dir.exists() {
         let _ = fs::remove_dir_all(&temp_dir);
     }
+    if temp_projects_dir.exists() {
+        let _ = fs::remove_dir_all(&temp_projects_dir);
+    }
     fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+    fs::create_dir_all(&temp_projects_dir).expect("Failed to create temp projects dir");
+    std::env::set_var("CAE_PROJECTS_DIR", &temp_projects_dir);
 
     // Initialize a git repo in temp_dir
     let run = |cmd: &str, args: &[&str]| {
@@ -76,13 +83,17 @@ Decisions made during development.
     let bin_path = env!("CARGO_BIN_EXE_cae");
 
     // 0. cae dir & cae status --dir
-    let dir_output = Command::new(bin_path)
-    .arg("dir")
-    .output()?;
+    let dir_output = Command::new(bin_path).arg("dir").output()?;
     assert!(dir_output.status.success());
-    let dir_stdout = String::from_utf8_lossy(&dir_output.stdout).trim().to_string();
-    assert!(dir_stdout.ends_with("projects"));
-    assert!(Path::new(&dir_stdout).exists(), "Directory does not exist: {}", dir_stdout);
+    let dir_stdout = String::from_utf8_lossy(&dir_output.stdout)
+        .trim()
+        .to_string();
+    assert!(dir_stdout.contains("cae_test_projects_"));
+    assert!(
+        Path::new(&dir_stdout).exists(),
+        "Directory does not exist: {}",
+        dir_stdout
+    );
 
     let status_dir_output = Command::new(bin_path)
         .args(["status", "--dir"])
@@ -103,7 +114,11 @@ Decisions made during development.
         .output()
         .expect("Failed to run cae track");
 
-    assert!(track_output.status.success(), "cae track failed: {:?}", String::from_utf8_lossy(&track_output.stderr));
+    assert!(
+        track_output.status.success(),
+        "cae track failed: {:?}",
+        String::from_utf8_lossy(&track_output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&track_output.stdout);
     assert!(stdout.contains("Successfully tracked project"));
     assert!(stdout.contains("Cargo.toml"));
@@ -165,4 +180,6 @@ Decisions made during development.
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
+    let _ = fs::remove_dir_all(&temp_projects_dir);
+    Ok(())
 }

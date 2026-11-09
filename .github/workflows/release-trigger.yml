@@ -1,0 +1,65 @@
+name: "Release Trigger (Deterministic)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Explicit release version (e.g., 0.2.0). Leave empty for automatic patch increment."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-release:
+    name: Bump Cargo.toml Version, Tag & Open Release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Next Version & Update Cargo.toml
+        id: bump
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          CURRENT_SEMVER=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml', 'rb'))['package']['version'])")
+          if [ -n "$INPUT_VERSION" ]; then
+            NEXT_SEMVER="$INPUT_VERSION"
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_SEMVER"
+            NEXT_SEMVER="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+
+          sed -i "0,/^version = \".*\"/s//version = \"${NEXT_SEMVER}\"/" Cargo.toml
+          cargo check
+          echo "semver=${NEXT_SEMVER}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEXT_SEMVER}" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release Branch, Tag & Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.bump.outputs.tag }}
+          SEMVER: ${{ steps.bump.outputs.semver }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="release/${TAG}"
+          git checkout -b "$BRANCH"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): bump version to ${SEMVER}"
+          git push origin "$BRANCH"
+
+          git tag -a "$TAG" -m "Release ${TAG}"
+          git push origin "$TAG"
+
+          gh pr create \
+            --title "chore(release): ${TAG}" \
+            --body "Deterministic release PR for **${TAG}** triggered via \`release-trigger.yml\`." \
+            --base main \
+            --head "$BRANCH"

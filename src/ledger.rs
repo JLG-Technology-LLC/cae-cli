@@ -25,10 +25,12 @@ pub struct ProjectLedger {
 
 /// Normalize a home directory path, stripping macOS App Sandbox container suffixes if present.
 pub fn normalize_home_dir(home: PathBuf) -> PathBuf {
-    // Use Path APIs to avoid converting to a string and back.
-    if let Some(parent) = home.parent() {
-        if home.ends_with("Library/Containers") {
-            return parent.to_path_buf();
+    // Use Path ancestor traversal to strip `/Library/Containers/<bundle-id>/Data` if present.
+    for ancestor in home.ancestors() {
+        if ancestor.ends_with("Library/Containers") {
+            if let Some(real_home) = ancestor.parent().and_then(|p| p.parent()) {
+                return real_home.to_path_buf();
+            }
         }
     }
     home
@@ -36,19 +38,18 @@ pub fn normalize_home_dir(home: PathBuf) -> PathBuf {
 
 /// Directory where project ledgers are stored: ~/.cae/projects/
 pub fn get_ledger_dir() -> Result<PathBuf> {
-    let dir = if let Some(custom_dir) =
-        std::env::var_os("CAE_PROJECTS_DIR").filter(|v| !v.is_empty())
-    {
-        let custom_path = PathBuf::from(custom_dir);
-        if !custom_path.is_absolute() {
-            return Err(anyhow::anyhow!("CAE_PROJECTS_DIR must be an absolute path"));
-        }
-        custom_path
-    } else {
-        let raw_home = dirs::home_dir().context("Could not determine user home directory")?;
-        let home = normalize_home_dir(raw_home);
-        home.join(".cae").join("projects")
-    };
+    let dir =
+        if let Some(custom_dir) = std::env::var_os("CAE_PROJECTS_DIR").filter(|v| !v.is_empty()) {
+            let custom_path = PathBuf::from(custom_dir);
+            if !custom_path.is_absolute() {
+                return Err(anyhow::anyhow!("CAE_PROJECTS_DIR must be an absolute path"));
+            }
+            custom_path
+        } else {
+            let raw_home = dirs::home_dir().context("Could not determine user home directory")?;
+            let home = normalize_home_dir(raw_home);
+            home.join(".cae").join("projects")
+        };
     if !dir.exists() {
         fs::create_dir_all(&dir)
             .with_context(|| format!("Creating ledger directory at {}", dir.display()))?;
@@ -68,8 +69,8 @@ pub fn get_ledger_path(id: &str) -> Result<PathBuf> {
 
 pub fn save_ledger(ledger: &ProjectLedger) -> Result<PathBuf> {
     let path = get_ledger_path(&ledger.id)?;
-    let json_data = serde_json::to_string_pretty(ledger)
-        .context("Serializing project ledger to JSON")?;
+    let json_data =
+        serde_json::to_string_pretty(ledger).context("Serializing project ledger to JSON")?;
     fs::write(&path, json_data)
         .with_context(|| format!("Writing ledger file to {}", path.display()))?;
     Ok(path)
@@ -127,7 +128,7 @@ pub fn find_ledger(query: &str) -> Result<Option<ProjectLedger>> {
 
     // 2. Query might be a path or substring of ID
     let all = list_all_ledgers()?;
-    
+
     // Exact canonical path match
     if let Ok(canonical) = fs::canonicalize(query) {
         let canonical_str = canonical.to_string_lossy().to_string();
@@ -163,7 +164,7 @@ pub fn find_ledger_for_current_dir() -> Result<Option<ProjectLedger>> {
     let canonical_str = canonical.to_string_lossy().to_string();
 
     let all = list_all_ledgers()?;
-    
+
     // Check exact match first
     for ledger in &all {
         if ledger.canonical_path == canonical_str {
@@ -210,9 +211,15 @@ mod tests {
 
     #[test]
     fn test_sanitize_project_id() {
-        assert_eq!(sanitize_project_id("AICareerAssetEngine"), "aicareerassetengine");
+        assert_eq!(
+            sanitize_project_id("AICareerAssetEngine"),
+            "aicareerassetengine"
+        );
         assert_eq!(sanitize_project_id("FastAPI Agent"), "fastapi-agent");
-        assert_eq!(sanitize_project_id("career_asset_engine"), "career-asset-engine");
+        assert_eq!(
+            sanitize_project_id("career_asset_engine"),
+            "career-asset-engine"
+        );
         assert_eq!(sanitize_project_id("my...cool_project!"), "my-cool-project");
     }
 

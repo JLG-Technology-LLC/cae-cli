@@ -144,8 +144,7 @@ pub fn get_commit_record(
 ) -> Result<GitCommitRecord> {
     let rev = commit_ref.unwrap_or("HEAD");
 
-    let hash = run_git_cmd(dir, &["rev-parse", rev])
-        .context("Failed to get git commit hash")?;
+    let hash = run_git_cmd(dir, &["rev-parse", rev]).context("Failed to get git commit hash")?;
 
     let short_hash = run_git_cmd(dir, &["rev-parse", "--short", rev])
         .unwrap_or_else(|| hash[..7.min(hash.len())].to_string());
@@ -156,8 +155,7 @@ pub fn get_commit_record(
     let date = run_git_cmd(dir, &["log", "-1", "--format=%aI", rev])
         .unwrap_or_else(|| Utc::now().to_rfc3339());
 
-    let default_message = run_git_cmd(dir, &["log", "-1", "--format=%B", rev])
-        .unwrap_or_default();
+    let default_message = run_git_cmd(dir, &["log", "-1", "--format=%B", rev]).unwrap_or_default();
 
     let message = match override_msg {
         Some(m) if !m.trim().is_empty() => m.trim().to_string(),
@@ -167,9 +165,12 @@ pub fn get_commit_record(
     let branch = run_git_cmd(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
         .unwrap_or_else(|| "detached".to_string());
 
-    let changed_files = run_git_cmd(dir, &["diff-tree", "--no-commit-id", "--name-only", "-r", &hash])
-        .map(|out| out.lines().map(|s| s.to_string()).collect())
-        .unwrap_or_default();
+    let changed_files = run_git_cmd(
+        dir,
+        &["diff-tree", "--no-commit-id", "--name-only", "-r", &hash],
+    )
+    .map(|out| out.lines().map(|s| s.to_string()).collect())
+    .unwrap_or_default();
 
     let recorded_at = Utc::now().to_rfc3339();
 
