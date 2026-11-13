@@ -188,7 +188,9 @@ fn require_profile(path: &Path) -> Result<CandidateWalletProfile> {
 
 fn load_with_rollover(path: &Path) -> Result<CandidateWalletProfile> {
     let mut profile = require_profile(path)?;
-    limit::rollover(&mut profile, &limit::today());
+    if limit::rollover(&mut profile, &limit::today()) {
+        save_profile(path, &profile)?;
+    }
     Ok(profile)
 }
 

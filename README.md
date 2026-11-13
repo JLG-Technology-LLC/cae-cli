@@ -476,15 +476,13 @@ Stored strictly with POSIX permissions `0600` (`-rw-------`):
 
 ```json
 {
-  "version": 1,
   "wallet_type": "local-eoa",
-  "address": "0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db",
+  "evm_address": "0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db",
   "network": "base-sepolia",
-  "daily_limit_usdc": "0.150000",
-  "spent_today_usdc": "0.030000",
-  "last_spend_date": "2026-11-12",
   "created_at": "2026-11-12T21:00:00.000000+00:00",
-  "updated_at": "2026-11-12T22:30:00.000000+00:00"
+  "daily_limit_usdc": 0.15,
+  "spent_today_usdc": 0.03,
+  "last_spend_date": "2026-11-12"
 }
 ```
 

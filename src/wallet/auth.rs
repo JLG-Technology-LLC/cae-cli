@@ -68,10 +68,10 @@ pub fn run_loopback_auth(port: u16, email_hint: Option<String>) -> Result<AuthRe
         )
     })?;
 
-    // Set accept timeout to 2 minutes
+    // Set accept timeout to 2 minutes with non-blocking polling
     listener
-        .set_nonblocking(false)
-        .context("Setting listener socket options")?;
+        .set_nonblocking(true)
+        .context("Setting listener non-blocking mode")?;
 
     let url = format!("http://localhost:{}/", port);
     eprintln!(
@@ -83,21 +83,33 @@ pub fn run_loopback_auth(port: u16, email_hint: Option<String>) -> Result<AuthRe
     // Try opening browser
     let _ = open_browser(&url);
 
-    // Loop until we handle callback or timeout
-    for _ in 0..10 {
-        let (mut stream, _) = listener
-            .accept()
-            .with_context(|| "Timeout or failure waiting for browser authentication callback")?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
 
-        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+    while std::time::Instant::now() < deadline {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let _ = stream.set_nonblocking(false);
+                stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+                stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
 
-        if let Some(auth_result) = handle_loopback_stream(&mut stream, email_hint.clone())? {
-            return Ok(auth_result);
+                match handle_loopback_stream(&mut stream, email_hint.clone()) {
+                    Ok(Some(auth_result)) => return Ok(auth_result),
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("Warning: Error handling connection: {}", e);
+                    }
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                bail!("Error accepting connection during authentication: {}", e);
+            }
         }
     }
 
-    bail!("Authentication timed out waiting for redirect callback")
+    bail!("Authentication timed out waiting for redirect callback (exceeded 2-minute deadline)")
 }
 
 fn open_browser(url: &str) -> Result<()> {
@@ -177,14 +189,16 @@ fn handle_loopback_stream(
         .cloned()
         .unwrap_or_else(|| format!("cdp_sess_{}", hex::encode(crypto_random_bytes())));
 
-    let evm_address = query_params
+    let raw_address = query_params
         .get("address")
-        .or_else(|| query_params.get("evm_address"))
-        .cloned()
-        .unwrap_or_else(|| {
-            // Derive a deterministic or secure address for this account
-            derive_address_for_email(&email)
-        });
+        .or_else(|| query_params.get("evm_address"));
+
+    let evm_address = match raw_address {
+        Some(addr) if crate::wallet::crypto::is_valid_address(addr) => addr.clone(),
+        _ => derive_address_for_email(&email),
+    };
+
+    let escaped_address = html_escape(&evm_address);
 
     let success_body = r#"<!DOCTYPE html>
 <html>
@@ -205,7 +219,7 @@ fn handle_loopback_stream(
     <p>Your candidate wallet has been synced with Coinbase Developer Platform.</p>
     <div class="badge">"#
         .to_string()
-        + &evm_address
+        + &escaped_address
         + r#"</div>
     <p>You can safely close this browser window and return to your terminal.</p>
   </div>
@@ -285,6 +299,22 @@ fn derive_address_for_email(email: &str) -> String {
     crate::wallet::crypto::to_checksum_address(&hash[12..])
 }
 
+/// Minimal HTML entity escaping for user/query parameters reflected in responses.
+pub fn html_escape(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#x27;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,5 +324,19 @@ mod tests {
         let addr = derive_address_for_email("candidate@example.com");
         assert!(crate::wallet::crypto::is_valid_address(&addr));
         assert_eq!(addr, derive_address_for_email("candidate@example.com"));
+    }
+
+    #[test]
+    fn test_html_escape_special_characters() {
+        let malicious = "<script>alert('xss' & \"hello\")</script>";
+        let escaped = html_escape(malicious);
+        assert_eq!(
+            escaped,
+            "&lt;script&gt;alert(&#x27;xss&#x27; &amp; &quot;hello&quot;)&lt;/script&gt;"
+        );
+        assert!(!escaped.contains('<'));
+        assert!(!escaped.contains('>'));
+        assert!(!escaped.contains('"'));
+        assert!(!escaped.contains('\''));
     }
 }

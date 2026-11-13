@@ -695,9 +695,14 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
 
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(300));
+        let mut attempts = 0;
         let mut stream = loop {
             if let Ok(s) = TcpStream::connect(format!("127.0.0.1:{}", port)) {
                 break s;
+            }
+            attempts += 1;
+            if attempts >= 100 {
+                panic!("Timeout waiting to connect to 127.0.0.1:{}", port);
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         };

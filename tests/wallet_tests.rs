@@ -233,6 +233,15 @@ fn export_key_is_refused_for_cdp_wallets() {
     assert_eq!(show["spent_today_usdc"], 0.0);
     assert_eq!(show["status"], "active");
     assert_eq!(show["email"], "candidate@example.com");
+
+    // Rollover is persisted to disk
+    let stored: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(sb.wallet_file()).unwrap()).unwrap();
+    assert_eq!(stored["spent_today_usdc"], 0.0);
+    assert_eq!(
+        stored["last_spend_date"],
+        chrono::Local::now().format("%Y-%m-%d").to_string()
+    );
 }
 
 #[test]
@@ -574,9 +583,14 @@ fn cdp_init_loopback_captures_auth_and_persists_embedded_profile() {
     std::thread::spawn(move || {
         // Wait briefly for cae to bind
         std::thread::sleep(std::time::Duration::from_millis(300));
+        let mut attempts = 0;
         let mut stream = loop {
             if let Ok(s) = TcpStream::connect(format!("127.0.0.1:{}", port)) {
                 break s;
+            }
+            attempts += 1;
+            if attempts >= 100 {
+                panic!("Timeout waiting to connect to 127.0.0.1:{}", port);
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         };
@@ -623,9 +637,14 @@ fn cdp_login_backs_up_active_local_wallet() {
 
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(300));
+        let mut attempts = 0;
         let mut stream = loop {
             if let Ok(s) = TcpStream::connect(format!("127.0.0.1:{}", port)) {
                 break s;
+            }
+            attempts += 1;
+            if attempts >= 100 {
+                panic!("Timeout waiting to connect to 127.0.0.1:{}", port);
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         };
