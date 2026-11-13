@@ -1,0 +1,32 @@
+# ==============================================================================
+# Dockerfile.test - Hermetic Test Container for cae-cli
+# Official Rust slim image on Debian Trixie for minimal storage footprint
+# Ref: https://github.com/docker-library/docs/tree/master/rust#readme
+# ==============================================================================
+ARG RUST_VERSION=1-slim-trixie
+FROM rust:${RUST_VERSION}
+
+ENV CARGO_TARGET_DIR=/target \
+    CAE_SKIP_BROWSER_OPEN=1
+
+# 1. Install minimal runtime dependencies (git is required for repo & hook E2E tests)
+# Use --no-install-recommends and purge apt cache to keep image storage lightweight
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Add rustfmt and clippy components for formatting and linting
+RUN rustup component add rustfmt clippy
+
+# 3. Configure hermetic git identity for post-commit and repository tests
+RUN git config --global user.name "CI Runner" && \
+    git config --global user.email "ci@example.com" && \
+    git config --global init.defaultBranch main
+
+# 4. Create isolated target and workspace directories
+RUN mkdir -p /target /workspace
+WORKDIR /workspace
+
+# Default command: execute the comprehensive E2E test suite
+CMD ["cargo", "test", "--test", "e2e_all_commands", "--all-features", "--", "--nocapture"]

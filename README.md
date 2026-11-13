@@ -104,6 +104,107 @@ cae untrack ../fastapi_agent
 
 ---
 
+### 5. Candidate Wallet Lifecycle (`cae wallet`)
+
+Manage persistent candidate non-custodial wallets on Base Sepolia (`eip155:84532`) and Base Mainnet (`eip155:8453`), track balances, compute tailoring quotas, and request testnet funding.
+
+#### Initialize a Wallet
+
+```bash
+# Initialize with CDP User Auth (default, hybrid browser loopback or email OTP)
+cae wallet init
+
+# Initialize an offline, device-local non-custodial wallet
+cae wallet init --local
+
+# Initialize on Base Mainnet with overwrite confirmation
+cae wallet init --local --network base --force
+
+# Machine-readable output for coding agents
+cae wallet init --local --json
+```
+
+#### Inspect Wallet Status and Address
+
+```bash
+# Display wallet metadata, network, and spend allowance
+cae wallet show
+
+# Emit only the 42-character checksummed address (ideal for shell piping)
+cae wallet address
+
+# JSON format
+cae wallet show --json
+```
+
+#### Check Balance & Tailoring Quota
+
+Queries native ETH and ERC-20 USDC balances and computes the candidate's tailoring quota ($0.03 USDC platform fee):
+
+```bash
+# Check current network balances
+cae wallet balance
+
+# Query Base Mainnet explicitly
+cae wallet balance --network base
+
+# Structured JSON for automation
+cae wallet balance --json
+```
+
+#### Fund Wallet with Testnet Tokens (Base Sepolia)
+
+```bash
+# Request testnet USDC from CDP faucet (default)
+cae wallet fund
+
+# Request testnet ETH for manual gas top-ups
+cae wallet fund --token eth
+
+# Machine-readable distribution receipt
+cae wallet fund --json
+```
+
+#### Network Switching
+
+```bash
+# Switch default active network to Base Mainnet
+cae wallet set-network base
+
+# Switch back to Base Sepolia testnet
+cae wallet set-network base-sepolia
+```
+
+#### Daily Spend Limit Management
+
+Protects candidate balances against unexpected run depletion with client-side spend allowances (matching Flutter `MandateService`, default `$0.15` USDC):
+
+```bash
+# View daily allowance and spend tracker
+cae wallet limit
+
+# Update daily allowance
+cae wallet limit set 0.30
+```
+
+#### Key Export & Multi-Device Sync
+
+```bash
+# Export local private key (requires interactive [y/N] confirmation)
+cae wallet export-key
+
+# Skip confirmation prompt in automated scripts
+cae wallet export-key --force
+
+# Sync across devices via CDP User Auth
+cae wallet login --email candidate@example.com
+
+# De-authorize active CDP session
+cae wallet logout
+```
+
+---
+
 ## Ledger Format (`~/.cae/projects/<id>.json`)
 
 Each tracked project has a corresponding JSON file in `~/.cae/projects/`:
@@ -137,10 +238,39 @@ Each tracked project has a corresponding JSON file in `~/.cae/projects/`:
 
 ---
 
-## Running Tests
+## Testing
 
-Run all unit and integration tests:
+Run all unit, integration, and E2E tests locally:
 
 ```bash
+# Run unit and integration tests
 cargo test
+
+# Run the comprehensive E2E pipeline test suite
+make e2e
+# or: cargo test --test e2e_all_commands --all-features -- --nocapture
+```
+
+### Running Tests in Lightweight Test Container (Debian Trixie)
+
+To run hermetic tests locally inside an isolated container with minimal disk footprint (using the official `rust:1-slim-trixie` image):
+
+```bash
+# Option 1: Using Makefile
+make docker-e2e
+
+# Option 2: Using Docker Compose
+docker compose -f docker-compose.test.yml run --rm e2e
+
+# Option 3: Direct Docker Run
+docker build -f Dockerfile.test -t cae-cli:test-trixie .
+docker run --rm \
+  -v "$(pwd):/workspace:ro" \
+  -v cae_cargo_target:/target \
+  -v cae_cargo_cache:/usr/local/cargo/registry \
+  -e CAE_SKIP_BROWSER_OPEN=1 \
+  -e CARGO_TARGET_DIR=/target \
+  -w /workspace \
+  cae-cli:test-trixie \
+  cargo test --test e2e_all_commands --all-features -- --nocapture
 ```

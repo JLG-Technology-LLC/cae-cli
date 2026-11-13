@@ -26,7 +26,7 @@ env:
 jobs:
   rust-ci:
     name: Format, Clippy & Hermetic Tests (Rust)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     steps:
@@ -49,6 +49,19 @@ jobs:
 
       - name: Run Hermetic Unit & Integration Tests
         run: cargo test --all-targets --all-features
+
+  semgrep-sast:
+    name: Semgrep SAST (Rust Static Analysis)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Run Semgrep SAST Security Gate
+        run: semgrep scan --config auto --severity=WARNING --error
 
   trivy-fs:
     name: Trivy Filesystem Scan (Cargo Vuln, Secret & Misconfig)
