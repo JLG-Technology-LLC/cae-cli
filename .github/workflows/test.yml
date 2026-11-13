@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     container:
-      image: semgrep/semgrep:1.98.0
+      image: semgrep/semgrep:latest
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
