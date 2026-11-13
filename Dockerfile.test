@@ -19,13 +19,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 2. Add rustfmt and clippy components for formatting and linting
 RUN rustup component add rustfmt clippy
 
-# 3. Configure hermetic git identity for post-commit and repository tests
+# 3. Create non-root developer user with accessible cargo and workspace directories
+RUN useradd -m -u 1000 -s /bin/bash testuser && \
+    mkdir -p /target /workspace /usr/local/cargo/registry /usr/local/cargo/git && \
+    chmod -R 777 /target /usr/local/cargo && \
+    chown -R testuser:testuser /target /workspace /usr/local/cargo
+
+USER testuser
+
+# 4. Configure hermetic git identity and safe directory for non-root user
 RUN git config --global user.name "CI Runner" && \
     git config --global user.email "ci@example.com" && \
-    git config --global init.defaultBranch main
+    git config --global init.defaultBranch main && \
+    git config --global --add safe.directory /workspace && \
+    git config --global --add safe.directory '*'
 
-# 4. Create isolated target and workspace directories
-RUN mkdir -p /target /workspace
 WORKDIR /workspace
 
 # Default command: execute the comprehensive E2E test suite
