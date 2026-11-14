@@ -44,7 +44,7 @@ semgrep-scan:
 	@if command -v semgrep >/dev/null 2>&1; then \
 		semgrep scan --config auto --severity=WARNING --error; \
 	else \
-		docker run --rm -v "$(CURDIR):/src" semgrep/semgrep:1.98.0 semgrep scan --config auto --severity=WARNING --error; \
+		docker run --rm -v "$(CURDIR):/src" semgrep/semgrep:1.185.0 semgrep scan --config auto --severity=WARNING --error; \
 	fi
 
 trivy-scan:
