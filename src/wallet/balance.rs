@@ -172,17 +172,18 @@ mod tests {
     }
 
     #[test]
-    fn parses_hex_quantities() {
-        assert_eq!(parse_hex_quantity("0x0").unwrap(), 0);
-        assert_eq!(parse_hex_quantity("0x").unwrap(), 0);
-        assert_eq!(parse_hex_quantity("0x16e360").unwrap(), 1_500_000);
+    fn parses_hex_quantities() -> Result<()> {
+        assert_eq!(parse_hex_quantity("0x0")?, 0);
+        assert_eq!(parse_hex_quantity("0x")?, 0);
+        assert_eq!(parse_hex_quantity("0x16e360")?, 1_500_000);
         assert_eq!(
-            parse_hex_quantity("0x11c37937e08000").unwrap(),
+            parse_hex_quantity("0x11c37937e08000")?,
             5_000_000_000_000_000
         );
         // balanceOf returns a full 32-byte word.
-        assert_eq!(parse_hex_quantity(&format!("0x{:064x}", 42u8)).unwrap(), 42);
+        assert_eq!(parse_hex_quantity(&format!("0x{:064x}", 42u8))?, 42);
         assert!(parse_hex_quantity("0xzz").is_err());
+        Ok(())
     }
 
     #[test]

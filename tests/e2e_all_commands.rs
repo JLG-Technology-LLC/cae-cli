@@ -39,7 +39,10 @@ impl TestHarness {
     }
 
     fn bin_dir() -> PathBuf {
-        Path::new(Self::bin()).parent().unwrap().to_path_buf()
+        Path::new(Self::bin())
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
     }
 
     fn print_output(&self, out: &Output) {
@@ -119,7 +122,9 @@ impl TestHarness {
 
 impl Drop for TestHarness {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(self.home.parent().unwrap());
+        if let Some(p) = self.home.parent() {
+            let _ = fs::remove_dir_all(p);
+        }
     }
 }
 
@@ -142,7 +147,10 @@ fn assert_success(out: &Output, context: &str) {
     );
 }
 
-fn init_sample_git_repo(repo_path: &Path, projects_dir: &Path) {
+fn init_sample_git_repo(
+    repo_path: &Path,
+    projects_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     let bin_dir = TestHarness::bin_dir();
     let current_path = std::env::var("PATH").unwrap_or_default();
     let new_path = format!("{}:{}", bin_dir.display(), current_path);
@@ -173,8 +181,7 @@ edition = "2021"
 [dependencies]
 serde = "1.0"
 "#,
-    )
-    .unwrap();
+    )?;
 
     // 2. Node.js package.json
     fs::write(
@@ -187,8 +194,7 @@ serde = "1.0"
   }
 }
 "#,
-    )
-    .unwrap();
+    )?;
 
     // 3. Python pyproject.toml
     fs::write(
@@ -200,33 +206,29 @@ dependencies = [
   "fastapi>=0.100.0"
 ]
 "#,
-    )
-    .unwrap();
+    )?;
 
     // 4. Agent Context Documents
     fs::write(
         repo_path.join("README.md"),
         "# Demo Repository\nContinuous integration sample repository.\n",
-    )
-    .unwrap();
+    )?;
     fs::write(
         repo_path.join("ARCHITECTURE.md"),
         "# Architecture\nDescribes decoupling between components.\n",
-    )
-    .unwrap();
+    )?;
     fs::write(
         repo_path.join("DESIGN.md"),
         "# Design Specifications\nDesign token rules and guidelines.\n",
-    )
-    .unwrap();
+    )?;
     fs::write(
         repo_path.join("MEMORY.md"),
         "# Agent Memory\nPersistent project conventions and decisions.\n",
-    )
-    .unwrap();
+    )?;
 
     run("git", &["add", "."]);
     run("git", &["commit", "-m", "chore: initial repository assets"]);
+    Ok(())
 }
 
 fn spawn_mock_rpc(
@@ -234,7 +236,7 @@ fn spawn_mock_rpc(
     usdc_hex: &'static str,
 ) -> (String, std::sync::mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock rpc");
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
@@ -285,7 +287,7 @@ fn spawn_mock_rpc(
 
 fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock faucet");
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
@@ -309,13 +311,13 @@ fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receive
 }
 
 #[test]
-fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
+fn test_ci_cd_all_commands_and_subcommands_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n========================================================");
     println!("=== CAE-CLI COMPREHENSIVE END-TO-END PIPELINE TEST ===");
     println!("========================================================\n");
 
     let h = TestHarness::new("full_e2e");
-    init_sample_git_repo(&h.sample_repo, &h.projects_dir);
+    init_sample_git_repo(&h.sample_repo, &h.projects_dir)?;
 
     // -------------------------------------------------------------------------
     // 1. Meta Commands: Help & Version
@@ -355,7 +357,7 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     println!("[3/14] Testing Project Tracking (cae track)...");
     let track_out = h.run_cae(&[
         "track",
-        h.sample_repo.to_str().unwrap(),
+        h.sample_repo.to_str().ok_or("invalid utf8 path")?,
         "--id",
         "demo-pipeline-proj",
         "--name",
@@ -408,11 +410,23 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     // Machine-readable JSON
     let json_status = h.run_cae(&["status", "demo-pipeline-proj", "--json"]);
     assert_success(&json_status, "cae status --json");
-    let status_val: serde_json::Value = serde_json::from_str(&stdout(&json_status)).unwrap();
+    let status_val: serde_json::Value = serde_json::from_str(&stdout(&json_status))?;
     assert_eq!(status_val["id"], "demo-pipeline-proj");
     assert_eq!(status_val["name"], "Pipeline Demo Project");
-    assert_eq!(status_val["manifests"].as_array().unwrap().len(), 3);
-    assert_eq!(status_val["context_files"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        status_val["manifests"]
+            .as_array()
+            .ok_or("expected array")?
+            .len(),
+        3
+    );
+    assert_eq!(
+        status_val["context_files"]
+            .as_array()
+            .ok_or("expected array")?
+            .len(),
+        4
+    );
 
     // -------------------------------------------------------------------------
     // 5. Commit Recording: record-commit
@@ -422,8 +436,7 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     fs::write(
         h.sample_repo.join("ARCHITECTURE.md"),
         "# Architecture Updated\nNew pipeline architecture specs.\n",
-    )
-    .unwrap();
+    )?;
     h.run_git_in_repo(&["commit", "-am", "feat: updated architecture specifications"]);
 
     // Auto-detect project in repo
@@ -447,8 +460,11 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
 
     // Verify commit count in status
     let status_after_commit = h.run_cae(&["status", "demo-pipeline-proj", "--json"]);
-    let sc_val: serde_json::Value = serde_json::from_str(&stdout(&status_after_commit)).unwrap();
-    assert!(!sc_val["commits"].as_array().unwrap().is_empty());
+    let sc_val: serde_json::Value = serde_json::from_str(&stdout(&status_after_commit))?;
+    assert!(!sc_val["commits"]
+        .as_array()
+        .ok_or("expected array")?
+        .is_empty());
 
     // -------------------------------------------------------------------------
     // 6. Project Untracking: untrack
@@ -489,7 +505,7 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(h.wallet_file()).unwrap().permissions().mode() & 0o777;
+        let mode = fs::metadata(h.wallet_file())?.permissions().mode() & 0o777;
         assert_eq!(
             mode, 0o600,
             "Wallet profile must have strict 0600 permissions"
@@ -511,7 +527,7 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
 
     let show_json = h.run_cae(&["wallet", "show", "--json"]);
     assert_success(&show_json, "cae wallet show --json");
-    let sj_val: serde_json::Value = serde_json::from_str(&stdout(&show_json)).unwrap();
+    let sj_val: serde_json::Value = serde_json::from_str(&stdout(&show_json))?;
     assert_eq!(sj_val["wallet_type"], "local-eoa");
     assert_eq!(sj_val["evm_address"], raw_addr);
     assert_eq!(sj_val["network"], "base-sepolia");
@@ -531,7 +547,7 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
 
     let limit_json = h.run_cae(&["wallet", "limit", "get", "--json"]);
     assert_success(&limit_json, "cae wallet limit get --json");
-    let lim_val: serde_json::Value = serde_json::from_str(&stdout(&limit_json)).unwrap();
+    let lim_val: serde_json::Value = serde_json::from_str(&stdout(&limit_json))?;
     assert_eq!(lim_val["daily_limit_usdc"], 0.45);
     assert_eq!(lim_val["daily_remaining_usdc"], 0.45);
 
@@ -544,12 +560,12 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     assert!(stdout(&set_net_base).contains("base (Base Mainnet)"));
 
     let show_base = h.run_cae(&["wallet", "show", "--json"]);
-    let sb_val: serde_json::Value = serde_json::from_str(&stdout(&show_base)).unwrap();
+    let sb_val: serde_json::Value = serde_json::from_str(&stdout(&show_base))?;
     assert_eq!(sb_val["network"], "base");
 
     let set_net_sepolia = h.run_cae(&["wallet", "set-network", "base-sepolia", "--json"]);
     assert_success(&set_net_sepolia, "cae wallet set-network base-sepolia");
-    let ss_val: serde_json::Value = serde_json::from_str(&stdout(&set_net_sepolia)).unwrap();
+    let ss_val: serde_json::Value = serde_json::from_str(&stdout(&set_net_sepolia))?;
     assert_eq!(ss_val["network"], "base-sepolia");
     assert_eq!(ss_val["chain_id"], 84532);
 
@@ -566,7 +582,7 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     // Verify JSON export mode
     let export_json = h.run_cae(&["wallet", "export-key", "--force", "--json"]);
     assert_success(&export_json, "cae wallet export-key --json");
-    let exp_val: serde_json::Value = serde_json::from_str(&stdout(&export_json)).unwrap();
+    let exp_val: serde_json::Value = serde_json::from_str(&stdout(&export_json))?;
     assert_eq!(exp_val["evm_address"], raw_addr);
     assert_eq!(exp_val["private_key"], raw_priv);
 
@@ -580,11 +596,11 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     println!("\n$ cae wallet balance --json");
     let mut bal_cmd = h.cmd(&["wallet", "balance", "--json"]);
     bal_cmd.env("CAE_RPC_URL_BASE_SEPOLIA", &rpc_url);
-    let bal_out = bal_cmd.output().unwrap();
+    let bal_out = bal_cmd.output()?;
     h.print_output(&bal_out);
     assert_success(&bal_out, "cae wallet balance --json");
 
-    let bal_val: serde_json::Value = serde_json::from_str(&stdout(&bal_out)).unwrap();
+    let bal_val: serde_json::Value = serde_json::from_str(&stdout(&bal_out))?;
     assert_eq!(bal_val["wallet_address"], raw_addr);
     assert_eq!(bal_val["network"], "base-sepolia");
     assert_eq!(bal_val["eth_balance"], 0.005);
@@ -612,11 +628,11 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     println!("\n$ cae wallet fund --json");
     let mut fund_cmd = h.cmd(&["wallet", "fund", "--json"]);
     fund_cmd.env("CAE_CDP_FAUCET_URL", &faucet_url);
-    let fund_out = fund_cmd.output().unwrap();
+    let fund_out = fund_cmd.output()?;
     h.print_output(&fund_out);
     assert_success(&fund_out, "cae wallet fund --json");
 
-    let fund_val: serde_json::Value = serde_json::from_str(&stdout(&fund_out)).unwrap();
+    let fund_val: serde_json::Value = serde_json::from_str(&stdout(&fund_out))?;
     assert_eq!(fund_val["recipient"], raw_addr);
     assert_eq!(fund_val["network"], "base-sepolia");
     assert_eq!(fund_val["token"], "USDC");
@@ -635,7 +651,7 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     let (rpc_url_funded, _funded_calls) = spawn_mock_rpc("0x2386f26fc10000", "0x989680"); // 0.01 ETH, 10.0 USDC (333 tailoring runs)
     let mut bal_after_fund = h.cmd(&["wallet", "balance"]);
     bal_after_fund.env("CAE_RPC_URL_BASE_SEPOLIA", &rpc_url_funded);
-    let bal_af_out = bal_after_fund.output().unwrap();
+    let bal_af_out = bal_after_fund.output()?;
     h.print_output(&bal_af_out);
     assert_success(&bal_af_out, "cae wallet balance after funding");
     assert!(stdout(&bal_af_out).contains("10.00 USDC"));
@@ -643,10 +659,10 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     println!("\n$ cae wallet balance --json (after funding)");
     let mut bal_after_fund_json = h.cmd(&["wallet", "balance", "--json"]);
     bal_after_fund_json.env("CAE_RPC_URL_BASE_SEPOLIA", &rpc_url_funded);
-    let bal_af_json_out = bal_after_fund_json.output().unwrap();
+    let bal_af_json_out = bal_after_fund_json.output()?;
     h.print_output(&bal_af_json_out);
     assert_success(&bal_af_json_out, "cae wallet balance --json after funding");
-    let bal_af_val: serde_json::Value = serde_json::from_str(&stdout(&bal_af_json_out)).unwrap();
+    let bal_af_val: serde_json::Value = serde_json::from_str(&stdout(&bal_af_json_out))?;
     assert_eq!(bal_af_val["usdc_balance"], 10.0);
     assert_eq!(bal_af_val["eth_balance"], 0.01);
     assert_eq!(bal_af_val["tailoring_runs_available"], 333);
@@ -663,19 +679,16 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .spawn()?;
 
     {
-        let mut stdin = child.stdin.take().unwrap();
-        stdin
-            .write_all(b"candidate@careerengine.local\n123456\n")
-            .unwrap();
+        let mut stdin = child.stdin.take().ok_or("missing stdin")?;
+        stdin.write_all(b"candidate@careerengine.local\n123456\n")?;
     }
-    let otp_out = child.wait_with_output().unwrap();
+    let otp_out = child.wait_with_output()?;
     h.print_output(&otp_out);
     assert_success(&otp_out, "cae wallet init (terminal OTP)");
-    let cdp_val: serde_json::Value = serde_json::from_str(&stdout(&otp_out)).unwrap();
+    let cdp_val: serde_json::Value = serde_json::from_str(&stdout(&otp_out))?;
     assert_eq!(cdp_val["wallet_type"], "cdp-embedded");
     assert_eq!(cdp_val["email"], "candidate@careerengine.local");
     assert_eq!(cdp_val["status"], "active");
@@ -689,8 +702,8 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     assert!(stderr(&enclave_guard).contains("enclave"));
 
     // B. Loopback redirect flow with login
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
     drop(listener);
 
     std::thread::spawn(move || {
@@ -715,10 +728,10 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     login_cmd
         .env("CAE_AUTH_PORT", port.to_string())
         .env("CAE_FORCE_BROWSER", "1");
-    let login_out = login_cmd.output().unwrap();
+    let login_out = login_cmd.output()?;
     h.print_output(&login_out);
     assert_success(&login_out, "cae wallet login (loopback)");
-    let login_val: serde_json::Value = serde_json::from_str(&stdout(&login_out)).unwrap();
+    let login_val: serde_json::Value = serde_json::from_str(&stdout(&login_out))?;
     assert_eq!(login_val["wallet_type"], "cdp-embedded");
     assert_eq!(
         login_val["evm_address"],
@@ -729,15 +742,16 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() {
     // C. Logout
     let logout_out = h.run_cae(&["wallet", "logout", "--json"]);
     assert_success(&logout_out, "cae wallet logout --json");
-    let lo_val: serde_json::Value = serde_json::from_str(&stdout(&logout_out)).unwrap();
+    let lo_val: serde_json::Value = serde_json::from_str(&stdout(&logout_out))?;
     assert_eq!(lo_val["status"], "logged-out");
     assert_eq!(lo_val["session_cleared"], true);
 
     let show_logged_out = h.run_cae(&["wallet", "show", "--json"]);
-    let slo_val: serde_json::Value = serde_json::from_str(&stdout(&show_logged_out)).unwrap();
+    let slo_val: serde_json::Value = serde_json::from_str(&stdout(&show_logged_out))?;
     assert_eq!(slo_val["status"], "logged-out");
 
     println!("\n========================================================");
     println!("=== ALL 14 COMMAND GROUPS & SUBCOMMANDS VERIFIED! ===");
     println!("========================================================\n");
+    Ok(())
 }

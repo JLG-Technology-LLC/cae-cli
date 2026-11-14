@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
 struct Sandbox {
     home: PathBuf,
 }
@@ -49,7 +51,7 @@ fn is_address(s: &str) -> bool {
 }
 
 #[test]
-fn init_local_then_address_and_show() {
+fn init_local_then_address_and_show() -> TestResult {
     let sb = Sandbox::new("init");
     let init = sb.cae(&["init", "--local"]);
     assert!(init.status.success(), "{}", stderr(&init));
@@ -67,31 +69,37 @@ fn init_local_then_address_and_show() {
     assert_eq!(json["network"], "base-sepolia");
     assert_eq!(json["status"], "active");
     assert_eq!(json["daily_limit_usdc"], 0.15);
-    assert_eq!(json["evm_address"].as_str().unwrap(), printed.trim());
+    assert_eq!(
+        json["evm_address"].as_str().ok_or("missing evm_address")?,
+        printed.trim()
+    );
     assert!(json.get("encrypted_privkey").is_none());
     assert!(json.get("session_ref").is_none());
 
     let human = stdout(&sb.cae(&["show"]));
     assert!(human.contains("local-eoa"));
-    let stored: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(sb.wallet_file()).unwrap()).unwrap();
-    let privkey = stored["encrypted_privkey"].as_str().unwrap();
+    let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(sb.wallet_file())?)?;
+    let privkey = stored["encrypted_privkey"]
+        .as_str()
+        .ok_or("missing privkey")?;
     assert!(!human.contains(privkey));
     assert!(!stdout(&init).contains(privkey));
+    Ok(())
 }
 
 #[cfg(unix)]
 #[test]
-fn wallet_file_is_owner_only() {
+fn wallet_file_is_owner_only() -> TestResult {
     use std::os::unix::fs::PermissionsExt;
     let sb = Sandbox::new("perms");
     assert!(sb.cae(&["init", "--local"]).status.success());
-    let mode = fs::metadata(sb.wallet_file()).unwrap().permissions().mode() & 0o777;
+    let mode = fs::metadata(sb.wallet_file())?.permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+    Ok(())
 }
 
 #[test]
-fn init_refuses_overwrite_without_force_and_backs_up_with_it() {
+fn init_refuses_overwrite_without_force_and_backs_up_with_it() -> TestResult {
     let sb = Sandbox::new("force");
     assert!(sb.cae(&["init", "--local"]).status.success());
     let first = stdout(&sb.cae(&["address"]));
@@ -107,10 +115,11 @@ fn init_refuses_overwrite_without_force_and_backs_up_with_it() {
 
     let bak = fs::read_to_string(sb.home.join("wallet.json.bak")).expect("backup written");
     assert!(bak.contains(first.trim()));
+    Ok(())
 }
 
 #[test]
-fn missing_wallet_exits_with_code_3() {
+fn missing_wallet_exits_with_code_3() -> TestResult {
     let sb = Sandbox::new("missing");
     for args in [
         vec!["address"],
@@ -123,22 +132,23 @@ fn missing_wallet_exits_with_code_3() {
         assert_eq!(out.status.code(), Some(3), "{args:?}: {}", stderr(&out));
         assert!(stderr(&out).contains("cae wallet init"));
     }
+    Ok(())
 }
 
 #[test]
-fn init_with_network_flag_sets_default_network() {
+fn init_with_network_flag_sets_default_network() -> TestResult {
     let sb = Sandbox::new("network_flag");
     assert!(sb
         .cae(&["init", "--local", "--network", "base"])
         .status
         .success());
-    let json: serde_json::Value =
-        serde_json::from_str(&stdout(&sb.cae(&["show", "--json"]))).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout(&sb.cae(&["show", "--json"])))?;
     assert_eq!(json["network"], "base");
+    Ok(())
 }
 
 #[test]
-fn set_network_switches_and_rejects_unknown() {
+fn set_network_switches_and_rejects_unknown() -> TestResult {
     let sb = Sandbox::new("setnet");
     assert!(sb.cae(&["init", "--local"]).status.success());
 
@@ -146,15 +156,15 @@ fn set_network_switches_and_rejects_unknown() {
     assert!(out.status.success());
     assert!(stdout(&out).contains("base (Base Mainnet)"));
 
-    let json: serde_json::Value =
-        serde_json::from_str(&stdout(&sb.cae(&["show", "--json"]))).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout(&sb.cae(&["show", "--json"])))?;
     assert_eq!(json["network"], "base");
 
     assert!(!sb.cae(&["set-network", "ethereum"]).status.success());
+    Ok(())
 }
 
 #[test]
-fn limit_get_set_and_validation() {
+fn limit_get_set_and_validation() -> TestResult {
     let sb = Sandbox::new("limit");
     assert!(sb.cae(&["init", "--local"]).status.success());
 
@@ -166,19 +176,19 @@ fn limit_get_set_and_validation() {
     assert!(stdout(&set).contains("updated to $0.30"));
 
     let json: serde_json::Value =
-        serde_json::from_str(&stdout(&sb.cae(&["limit", "get", "--json"]))).unwrap();
+        serde_json::from_str(&stdout(&sb.cae(&["limit", "get", "--json"])))?;
     assert_eq!(json["daily_limit_usdc"], 0.3);
     assert_eq!(json["daily_remaining_usdc"], 0.3);
 
     assert!(!sb.cae(&["limit", "set", "-1"]).status.success());
     assert!(!sb.cae(&["limit", "set", "abc"]).status.success());
-    let after: serde_json::Value =
-        serde_json::from_str(&stdout(&sb.cae(&["limit", "--json"]))).unwrap();
+    let after: serde_json::Value = serde_json::from_str(&stdout(&sb.cae(&["limit", "--json"])))?;
     assert_eq!(after["daily_limit_usdc"], 0.3);
+    Ok(())
 }
 
 #[test]
-fn export_key_requires_confirmation_or_force() {
+fn export_key_requires_confirmation_or_force() -> TestResult {
     let sb = Sandbox::new("export");
     assert!(sb.cae(&["init", "--local"]).status.success());
 
@@ -194,16 +204,21 @@ fn export_key_requires_confirmation_or_force() {
     assert!(key.starts_with("0x"));
 
     // The exported key must correspond to the stored address.
-    let stored: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(sb.wallet_file()).unwrap()).unwrap();
+    let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(sb.wallet_file())?)?;
     assert_eq!(
-        format!("0x{}", stored["encrypted_privkey"].as_str().unwrap()),
+        format!(
+            "0x{}",
+            stored["encrypted_privkey"]
+                .as_str()
+                .ok_or("missing privkey")?
+        ),
         key.trim()
     );
+    Ok(())
 }
 
 #[test]
-fn export_key_is_refused_for_cdp_wallets() {
+fn export_key_is_refused_for_cdp_wallets() -> TestResult {
     let sb = Sandbox::new("export_cdp");
     fs::write(
         sb.wallet_file(),
@@ -219,8 +234,7 @@ fn export_key_is_refused_for_cdp_wallets() {
   "spent_today_usdc": 0.03,
   "last_spend_date": "2026-01-01"
 }"#,
-    )
-    .unwrap();
+    )?;
 
     let out = sb.cae(&["export-key", "--force"]);
     assert!(!out.status.success());
@@ -228,24 +242,23 @@ fn export_key_is_refused_for_cdp_wallets() {
     assert!(!stdout(&out).contains("0x"));
 
     // Stale spend date rolls over in the reported view.
-    let show: serde_json::Value =
-        serde_json::from_str(&stdout(&sb.cae(&["show", "--json"]))).unwrap();
+    let show: serde_json::Value = serde_json::from_str(&stdout(&sb.cae(&["show", "--json"])))?;
     assert_eq!(show["spent_today_usdc"], 0.0);
     assert_eq!(show["status"], "active");
     assert_eq!(show["email"], "candidate@example.com");
 
     // Rollover is persisted to disk
-    let stored: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(sb.wallet_file()).unwrap()).unwrap();
+    let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(sb.wallet_file())?)?;
     assert_eq!(stored["spent_today_usdc"], 0.0);
     assert_eq!(
         stored["last_spend_date"],
         chrono::Local::now().format("%Y-%m-%d").to_string()
     );
+    Ok(())
 }
 
 #[test]
-fn logout_clears_session_but_keeps_address() {
+fn logout_clears_session_but_keeps_address() -> TestResult {
     let sb = Sandbox::new("logout");
     fs::write(
         sb.wallet_file(),
@@ -261,41 +274,41 @@ fn logout_clears_session_but_keeps_address() {
   "spent_today_usdc": 0.0,
   "last_spend_date": "2026-11-11"
 }"#,
-    )
-    .unwrap();
+    )?;
 
     let out = sb.cae(&["logout", "--json"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out))?;
     assert_eq!(json["session_cleared"], true);
 
-    let raw = fs::read_to_string(sb.wallet_file()).unwrap();
+    let raw = fs::read_to_string(sb.wallet_file())?;
     assert!(!raw.contains("cdp_sess_example"));
-    let show: serde_json::Value =
-        serde_json::from_str(&stdout(&sb.cae(&["show", "--json"]))).unwrap();
+    let show: serde_json::Value = serde_json::from_str(&stdout(&sb.cae(&["show", "--json"])))?;
     assert_eq!(show["status"], "logged-out");
     assert_eq!(
         show["evm_address"],
         "0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c"
     );
+    Ok(())
 }
 
 #[test]
-fn logout_on_local_wallet_is_an_error() {
+fn logout_on_local_wallet_is_an_error() -> TestResult {
     let sb = Sandbox::new("logout_local");
     assert!(sb.cae(&["init", "--local"]).status.success());
     assert!(!sb.cae(&["logout"]).status.success());
+    Ok(())
 }
 
 #[test]
-fn relative_cae_home_is_rejected() {
+fn relative_cae_home_is_rejected() -> TestResult {
     let out = Command::new(env!("CARGO_BIN_EXE_cae"))
         .args(["wallet", "show"])
         .env("CAE_HOME", "relative/path")
-        .output()
-        .unwrap();
+        .output()?;
     assert!(!out.status.success());
     assert!(stderr(&out).contains("absolute"));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +324,7 @@ fn spawn_mock_rpc(
     usdc_hex: &'static str,
 ) -> (String, std::sync::mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock rpc");
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
@@ -381,7 +394,7 @@ impl Sandbox {
 }
 
 #[test]
-fn balance_reports_eth_usdc_and_tailoring_quota() {
+fn balance_reports_eth_usdc_and_tailoring_quota() -> TestResult {
     let sb = Sandbox::new("balance");
     assert!(sb.cae(&["init", "--local"]).status.success());
     let address = stdout(&sb.cae(&["address"])).trim().to_string();
@@ -391,8 +404,13 @@ fn balance_reports_eth_usdc_and_tailoring_quota() {
 
     let out = sb.cae_with_rpc(&["balance", "--json"], &url);
     assert!(out.status.success(), "{}", stderr(&out));
-    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
-    assert_eq!(json["wallet_address"].as_str().unwrap(), address);
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out))?;
+    assert_eq!(
+        json["wallet_address"]
+            .as_str()
+            .ok_or("missing wallet_address")?,
+        address
+    );
     assert_eq!(json["network"], "base-sepolia");
     assert_eq!(json["eth_balance"], 0.005);
     assert_eq!(json["usdc_balance"], 1.5);
@@ -416,10 +434,11 @@ fn balance_reports_eth_usdc_and_tailoring_quota() {
     assert!(human.contains("Base Sepolia (Chain ID: 84532)"));
     assert!(human.contains("USDC:    1.50 USDC"));
     assert!(human.contains("Tailoring Capacity: 50 runs ($0.03 USDC per run)"));
+    Ok(())
 }
 
 #[test]
-fn balance_network_flag_targets_mainnet_rpc_and_contract() {
+fn balance_network_flag_targets_mainnet_rpc_and_contract() -> TestResult {
     let sb = Sandbox::new("balance_mainnet");
     assert!(sb.cae(&["init", "--local"]).status.success());
     let (url, calls) = spawn_mock_rpc("0x0", "0x0");
@@ -432,10 +451,9 @@ fn balance_network_flag_targets_mainnet_rpc_and_contract() {
         .env("NO_PROXY", "*")
         .env("no_proxy", "*")
         .stdin(std::process::Stdio::null())
-        .output()
-        .unwrap();
+        .output()?;
     assert!(out.status.success(), "{}", stderr(&out));
-    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out))?;
     assert_eq!(json["network"], "base");
     assert_eq!(json["tailoring_runs_available"], 0);
 
@@ -443,10 +461,11 @@ fn balance_network_flag_targets_mainnet_rpc_and_contract() {
     assert!(seen
         .iter()
         .any(|c| c.contains("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")));
+    Ok(())
 }
 
 #[test]
-fn balance_uses_wallet_default_network() {
+fn balance_uses_wallet_default_network() -> TestResult {
     let sb = Sandbox::new("balance_default_net");
     assert!(sb
         .cae(&["init", "--local", "--network", "base"])
@@ -456,10 +475,11 @@ fn balance_uses_wallet_default_network() {
     let (url, _calls) = spawn_mock_rpc("0x0", "0x0");
     let out = sb.cae_with_rpc(&["balance", "--json"], &url);
     assert!(!out.status.success());
+    Ok(())
 }
 
 #[test]
-fn balance_offline_reports_cached_address() {
+fn balance_offline_reports_cached_address() -> TestResult {
     let sb = Sandbox::new("balance_offline");
     assert!(sb.cae(&["init", "--local"]).status.success());
     let address = stdout(&sb.cae(&["address"])).trim().to_string();
@@ -469,13 +489,15 @@ fn balance_offline_reports_cached_address() {
     let err = stderr(&out);
     assert!(err.contains(&address), "{err}");
     assert!(err.contains("network connection"), "{err}");
+    Ok(())
 }
 
 #[test]
-fn balance_without_wallet_exits_with_code_3() {
+fn balance_without_wallet_exits_with_code_3() -> TestResult {
     let sb = Sandbox::new("balance_nowallet");
     let out = sb.cae(&["balance"]);
     assert_eq!(out.status.code(), Some(3));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -484,7 +506,7 @@ fn balance_without_wallet_exits_with_code_3() {
 
 fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock faucet");
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
@@ -510,7 +532,7 @@ fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receive
 }
 
 #[test]
-fn faucet_refused_on_mainnet_with_exit_code_5() {
+fn faucet_refused_on_mainnet_with_exit_code_5() -> TestResult {
     let sb = Sandbox::new("faucet_mainnet");
     assert!(sb
         .cae(&["init", "--local", "--network", "base"])
@@ -525,10 +547,11 @@ fn faucet_refused_on_mainnet_with_exit_code_5() {
         "{err}"
     );
     assert!(err.contains("Base Mainnet"), "{err}");
+    Ok(())
 }
 
 #[test]
-fn faucet_success_on_base_sepolia() {
+fn faucet_success_on_base_sepolia() -> TestResult {
     let sb = Sandbox::new("faucet_sepolia");
     assert!(sb.cae(&["init", "--local"]).status.success());
     let address = stdout(&sb.cae(&["address"])).trim().to_string();
@@ -564,6 +587,7 @@ fn faucet_success_on_base_sepolia() {
     assert_eq!(seen.len(), 1);
     assert!(seen[0].contains(&address));
     assert!(seen[0].contains("usdc"));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -571,12 +595,12 @@ fn faucet_success_on_base_sepolia() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn cdp_init_loopback_captures_auth_and_persists_embedded_profile() {
+fn cdp_init_loopback_captures_auth_and_persists_embedded_profile() -> TestResult {
     let sb = Sandbox::new("cdp_init");
 
     // Pick an ephemeral port for test loopback
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
     drop(listener);
 
     // Spawn client callback thread to hit loopback
@@ -619,20 +643,20 @@ fn cdp_init_loopback_captures_auth_and_persists_embedded_profile() {
     assert_eq!(json["network"], "base-sepolia");
     assert_eq!(json["status"], "active");
 
-    let stored: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(sb.wallet_file()).unwrap()).unwrap();
+    let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(sb.wallet_file())?)?;
     assert_eq!(stored["session_ref"], "cdp_sess_token123");
     assert!(stored["encrypted_privkey"].is_null());
+    Ok(())
 }
 
 #[test]
-fn cdp_login_backs_up_active_local_wallet() {
+fn cdp_login_backs_up_active_local_wallet() -> TestResult {
     let sb = Sandbox::new("cdp_login_bak");
     assert!(sb.cae(&["init", "--local"]).status.success());
     let local_addr = stdout(&sb.cae(&["address"])).trim().to_string();
 
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
     drop(listener);
 
     std::thread::spawn(move || {
@@ -667,23 +691,23 @@ fn cdp_login_backs_up_active_local_wallet() {
     // Verify local backup file exists and has previous local address
     let bak_path = sb.home.join("wallet.local.bak");
     assert!(bak_path.exists(), "wallet.local.bak missing");
-    let bak_content = fs::read_to_string(&bak_path).unwrap();
+    let bak_content = fs::read_to_string(&bak_path)?;
     assert!(bak_content.contains(&local_addr));
     assert!(bak_content.contains("local-eoa"));
 
     // Verify current profile is now cdp-embedded
-    let show: serde_json::Value =
-        serde_json::from_str(&stdout(&sb.cae(&["show", "--json"]))).unwrap();
+    let show: serde_json::Value = serde_json::from_str(&stdout(&sb.cae(&["show", "--json"])))?;
     assert_eq!(show["wallet_type"], "cdp-embedded");
     assert_eq!(
         show["evm_address"],
         "0x1111111111111111111111111111111111111111"
     );
     assert_eq!(show["email"], "new@example.com");
+    Ok(())
 }
 
 #[test]
-fn cdp_init_terminal_otp() {
+fn cdp_init_terminal_otp() -> TestResult {
     let sb = Sandbox::new("cdp_otp");
     let mut child = Command::new(env!("CARGO_BIN_EXE_cae"))
         .args(["wallet", "init", "--no-browser", "--json"])
@@ -691,18 +715,18 @@ fn cdp_init_terminal_otp() {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+        .spawn()?;
 
     {
-        let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(b"candidate@example.com\n123456\n").unwrap();
+        let mut stdin = child.stdin.take().ok_or("missing stdin")?;
+        stdin.write_all(b"candidate@example.com\n123456\n")?;
     }
 
-    let out = child.wait_with_output().unwrap();
+    let out = child.wait_with_output()?;
     assert!(out.status.success(), "{}", stderr(&out));
     let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("init json");
     assert_eq!(json["wallet_type"], "cdp-embedded");
     assert_eq!(json["email"], "candidate@example.com");
     assert_eq!(json["status"], "active");
+    Ok(())
 }

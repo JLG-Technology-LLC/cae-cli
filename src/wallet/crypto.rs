@@ -73,38 +73,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn derives_known_address_for_private_key_one() {
+    fn derives_known_address_for_private_key_one() -> Result<()> {
         let key = format!("{:064x}", 1);
-        assert_eq!(
-            address_from_private_key_hex(&key).unwrap(),
-            "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
-        );
+        let addr = address_from_private_key_hex(&key)?;
+        assert_eq!(addr, "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf");
+        Ok(())
     }
 
     #[test]
-    fn matches_eip55_reference_vectors() {
+    fn matches_eip55_reference_vectors() -> Result<()> {
         for expected in [
             "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
             "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
             "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
             "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
         ] {
-            let bytes = hex::decode(&expected[2..]).unwrap();
+            let bytes = hex::decode(&expected[2..])?;
             assert_eq!(to_checksum_address(&bytes), expected);
         }
+        Ok(())
     }
 
     #[test]
-    fn generated_keys_are_valid_and_unique() {
-        let a = generate_local_key().unwrap();
-        let b = generate_local_key().unwrap();
+    fn generated_keys_are_valid_and_unique() -> Result<()> {
+        let a = generate_local_key()?;
+        let b = generate_local_key()?;
         assert!(is_valid_address(&a.address));
         assert_eq!(a.private_key_hex.len(), 64);
         assert_ne!(a.private_key_hex, b.private_key_hex);
-        assert_eq!(
-            address_from_private_key_hex(&a.private_key_hex).unwrap(),
-            a.address
-        );
+        assert_eq!(address_from_private_key_hex(&a.private_key_hex)?, a.address);
+        Ok(())
     }
 
     #[test]

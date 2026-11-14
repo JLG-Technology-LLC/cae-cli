@@ -44,7 +44,7 @@ semgrep-scan:
 	@if command -v semgrep >/dev/null 2>&1; then \
 		semgrep scan --config auto --severity=WARNING --error; \
 	else \
-		docker run --rm -v "$(CURDIR):/src" semgrep/semgrep semgrep scan --config auto --severity=WARNING --error; \
+		docker run --rm -v "$(CURDIR):/src" semgrep/semgrep:1.98.0 semgrep scan --config auto --severity=WARNING --error; \
 	fi
 
 trivy-scan:
@@ -52,7 +52,7 @@ trivy-scan:
 	@if command -v trivy >/dev/null 2>&1; then \
 		trivy fs . --scanners vuln,secret,misconfig --severity CRITICAL,HIGH --ignore-unfixed --skip-dirs target --exit-code 1; \
 	else \
-		docker run --rm -v "$(CURDIR):/workspace" -w /workspace aquasec/trivy:latest fs . --scanners vuln,secret,misconfig --severity CRITICAL,HIGH --ignore-unfixed --skip-dirs target --exit-code 1; \
+		docker run --rm -v "$(CURDIR):/workspace" -w /workspace aquasec/trivy:0.58.2 fs . --scanners vuln,secret,misconfig --severity CRITICAL,HIGH --ignore-unfixed --skip-dirs target --exit-code 1; \
 	fi
 
 security: semgrep-scan trivy-scan

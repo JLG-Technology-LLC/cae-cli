@@ -216,63 +216,58 @@ pub(crate) mod tests {
         }
     }
 
-    fn temp_dir(tag: &str) -> PathBuf {
+    fn temp_dir(tag: &str) -> Result<PathBuf> {
         let dir = std::env::temp_dir().join(format!("cae_wallet_{}_{}", tag, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
     }
 
     #[test]
-    fn roundtrip_and_missing_file() {
-        let dir = temp_dir("roundtrip");
+    fn roundtrip_and_missing_file() -> Result<()> {
+        let dir = temp_dir("roundtrip")?;
         let path = dir.join("nested").join("wallet.json");
-        assert!(load_profile(&path).unwrap().is_none());
+        assert!(load_profile(&path)?.is_none());
 
         let profile = sample();
-        save_profile(&path, &profile).unwrap();
-        assert_eq!(load_profile(&path).unwrap(), Some(profile));
+        save_profile(&path, &profile)?;
+        assert_eq!(load_profile(&path)?, Some(profile));
         let _ = fs::remove_dir_all(&dir);
+        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn saved_file_is_owner_only() {
+    fn saved_file_is_owner_only() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
-        let dir = temp_dir("perms");
+        let dir = temp_dir("perms")?;
         let path = dir.join("wallet.json");
-        save_profile(&path, &sample()).unwrap();
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        save_profile(&path, &sample())?;
+        assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
 
         // Overwriting an existing file keeps the restrictive mode.
-        save_profile(&path, &sample()).unwrap();
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        save_profile(&path, &sample())?;
+        assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
 
-        let bak = backup_profile(&path).unwrap();
-        assert_eq!(
-            fs::metadata(&bak).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        let bak = backup_profile(&path)?;
+        assert_eq!(fs::metadata(&bak)?.permissions().mode() & 0o777, 0o600);
         let _ = fs::remove_dir_all(&dir);
+        Ok(())
     }
 
     #[test]
-    fn serializes_contract_enum_values() {
-        let json = serde_json::to_value(sample()).unwrap();
+    fn serializes_contract_enum_values() -> Result<()> {
+        let json = serde_json::to_value(sample())?;
         assert_eq!(json["wallet_type"], "local-eoa");
         assert_eq!(json["network"], "base-sepolia");
+        Ok(())
     }
 
     #[test]
     fn rejects_unknown_fields() {
-        let mut json = serde_json::to_value(sample()).unwrap();
-        json["surprise"] = serde_json::json!(true);
-        assert!(serde_json::from_value::<CandidateWalletProfile>(json).is_err());
+        if let Ok(mut json) = serde_json::to_value(sample()) {
+            json["surprise"] = serde_json::json!(true);
+            assert!(serde_json::from_value::<CandidateWalletProfile>(json).is_err());
+        }
     }
 }

@@ -138,19 +138,21 @@ mod tests {
     }
 
     #[test]
-    fn within_budget_records_spend() {
+    fn within_budget_records_spend() -> Result<()> {
         let mut p = sample();
-        authorize_spend(&mut p, 0.03, true).unwrap();
+        authorize_spend(&mut p, 0.03, true)?;
         assert!((p.spent_today_usdc - 0.03).abs() < 1e-9);
         assert_eq!(p.last_spend_date, today());
+        Ok(())
     }
 
     #[test]
-    fn parses_limits() {
-        assert_eq!(parse_limit("0.30").unwrap(), 0.30);
-        assert_eq!(parse_limit("$1").unwrap(), 1.0);
+    fn parses_limits() -> Result<()> {
+        assert_eq!(parse_limit("0.30")?, 0.30);
+        assert_eq!(parse_limit("$1")?, 1.0);
         assert!(parse_limit("-1").is_err());
         assert!(parse_limit("abc").is_err());
         assert!(parse_limit("NaN").is_err());
+        Ok(())
     }
 }
