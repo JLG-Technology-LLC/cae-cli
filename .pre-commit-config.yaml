@@ -1,0 +1,38 @@
+fail_fast: true
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: Cargo Format Check
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: Cargo Clippy Lints
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-test
+        name: Cargo Tests
+        entry: cargo test --all-targets --all-features
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: semgrep-sast
+        name: Semgrep (Rust SAST Security Scan)
+        entry: semgrep scan --config auto --severity=WARNING --error
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: trivy-fs
+        name: Trivy (Filesystem Security Scan)
+        entry: trivy fs . --scanners vuln,secret,misconfig --severity CRITICAL,HIGH --ignore-unfixed --skip-dirs target --exit-code 1
+        language: system
+        pass_filenames: false
+        always_run: true
