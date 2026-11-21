@@ -1,6 +1,10 @@
 <!--
 Sync Impact Report
-- Version change: [CONSTITUTION_VERSION] (uninitialized template) → 1.0.0
+- Version change: 1.0.0 → 1.1.0 (MINOR, 2026-11-11): Principle I relaxed from "strictly offline"
+  to "no telemetry / no cloud sync of ledger data", permitting explicit user-initiated network
+  calls from `cae wallet` (spec 005-cdp-wallet-cli). Rationale: balance, faucet, and CDP auth are
+  inherently networked; project-tracking commands stay offline.
+- Previous change: [CONSTITUTION_VERSION] (uninitialized template) → 1.0.0
 - Modified principles:
   - [PRINCIPLE_1_NAME] → I. Local-First Ledger Integrity & Atomic Persistence
   - [PRINCIPLE_2_NAME] → II. Deterministic Manifest & Agent Context Extraction
@@ -25,8 +29,12 @@ Sync Impact Report
 ### I. Local-First Ledger Integrity & Atomic Persistence
 All tracked project metadata, manifest snapshots, extracted agent context summaries, and commit
 histories MUST be persisted locally under `~/.cae/projects/<id>.json` (`src/ledger.rs`). `cae-cli`
-MUST operate strictly offline without outbound network telemetry, cloud storage synchronization, or
-secret exfiltration. Ledger schemas MUST remain backward-compatible with `AICareerAssetEngine`
+MUST NOT emit outbound network telemetry, synchronize ledger or project data to cloud storage, or
+exfiltrate secrets. Project-tracking commands (`track`, `untrack`, `status`, `record-commit`) MUST
+remain fully offline. The `cae wallet` command group MAY make outbound requests ONLY when the user
+explicitly invokes a command whose purpose requires it (public JSON-RPC balance reads, testnet
+faucet requests, CDP authentication); such requests MUST NOT carry ledger/project data, MUST NOT
+transmit private keys or seeds, and MUST NOT run implicitly in the background. Ledger schemas MUST remain backward-compatible with `AICareerAssetEngine`
 (`SPEC-031` project ingestion contracts) so the Flutter client and coding agents can reliably read
 `~/.cae/projects/`.
 
@@ -110,4 +118,4 @@ and pull request review MUST verify compliance with Core Principles I–V.
 - **Compliance Review**: Any PR violating local-first privacy, read-only Git introspection, or
   hermetic test isolation MUST be rejected until remediated.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-09 | **Last Amended**: 2026-11-09
+**Version**: 1.1.0 | **Ratified**: 2026-11-09 | **Last Amended**: 2026-11-11

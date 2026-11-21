@@ -93,6 +93,17 @@ Write `ASSESS_DIR/decision.md`:
   - **needs-clarification** → re-run the named stage (e.g. `/speckit-assess-research slug=<ASSESS_SLUG>`).
   - **kill** → none; the assessment is closed. The record remains for future reference.
 
+## Mandatory Post-Execution Hooks
+
+Only enter this section after writing `decision.md` in this run.
+
+Check if `.specify/extensions.yml` exists in the project root and look for entries under `hooks.after_assess_decide`:
+- Filter out hooks where `enabled` is explicitly `false`.
+- Ignore hooks with a non-empty `condition`.
+- For each executable hook, replace dots (`.`) with hyphens (`-`) to construct the skill command (e.g., `speckit.github.featureissue` → `/speckit-github-featureissue`):
+  - **Mandatory hook (`optional: false`)**: emit `EXECUTE_COMMAND: {command}` and invoke the hook skill immediately, passing the resolved `ASSESS_SLUG` and `ASSESS_DIR/decision.md` context.
+  - **Optional hook (`optional: true`)**: display the prompt so the user can choose to run it.
+
 ## Guardrails
 
 - Never modify source files — read only, and write inside `.specify/assessments/<slug>/`.

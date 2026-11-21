@@ -2,6 +2,7 @@ mod context;
 mod git;
 mod ledger;
 mod manifest;
+mod wallet;
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -99,6 +100,12 @@ enum Commands {
         #[arg(short, long)]
         commit: Option<String>,
     },
+
+    /// Manage your candidate wallet (non-custodial EVM identity for tailoring payments)
+    Wallet {
+        #[command(subcommand)]
+        command: wallet::WalletCommand,
+    },
 }
 
 fn main() -> Result<()> {
@@ -136,6 +143,14 @@ fn main() -> Result<()> {
             note,
             commit,
         } => handle_record_commit(project, message, note, commit),
+
+        Commands::Wallet { command } => {
+            if let Err(err) = wallet::run(command) {
+                eprintln!("Error: {:#}", err);
+                std::process::exit(wallet::exit_code(&err));
+            }
+            Ok(())
+        }
     }
 }
 
