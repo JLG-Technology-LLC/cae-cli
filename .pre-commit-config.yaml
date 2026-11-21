@@ -1,4 +1,5 @@
 fail_fast: true
+default_stages: [pre-commit]
 repos:
   - repo: local
     hooks:
@@ -36,3 +37,9 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+
+      - id: commitlint
+        name: Commitlint (Conventional Commits)
+        entry: sh -c 'cargo commitlint check < "$1"' --
+        language: system
+        stages: [commit-msg]
