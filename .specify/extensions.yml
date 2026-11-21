@@ -202,6 +202,14 @@ hooks:
     description: Create Git Flow bugfix branch from dev before bug remediation
     condition: null
   after_bug_test:
+  - extension: github
+    command: speckit.github.bugverify
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Post bug verification outcome to linked GitHub issue?
+    description: Post test.md verification summary to GitHub bug issue and update labels
+    condition: null
   - extension: gitflow
     command: speckit.gitflow.bugfix-finish
     enabled: true

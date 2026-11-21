@@ -34,9 +34,23 @@ $ARGUMENTS
 Ask the user (unless specified in `$ARGUMENTS`) whether to:
 1. **Open a Pull Request into `dev` (Recommended for protected branches)**:
    - Push the feature branch: `git push -u origin "$CURRENT_BRANCH"`
+   - Derive `FEATURE_SLUG` by stripping any leading numeric prefix (`^[0-9]+-`) from `FLOW_FEATURE_NAME`, then look up the corresponding open GitHub feature issue (falling back to the full `FLOW_FEATURE_NAME` if not found):
+     ```bash
+     FEATURE_SLUG=$(echo "$FLOW_FEATURE_NAME" | sed -E 's/^[0-9]+-//')
+     ISSUE_JSON=$(gh issue list --state open --search "speckit-feature:${FEATURE_SLUG}" --json number,url --jq '.[0]')
+     if [ -z "$ISSUE_JSON" ] || [ "$ISSUE_JSON" = "null" ]; then
+       ISSUE_JSON=$(gh issue list --state open --search "speckit-feature:${FLOW_FEATURE_NAME}" --json number,url --jq '.[0]')
+     fi
+     ISSUE_NUMBER=$(echo "$ISSUE_JSON" | jq -r '.number // empty')
+     ```
+   - Build the PR body: include `Implements spec \`specs/${FLOW_FEATURE_NAME}/spec.md\`.` and, if `ISSUE_NUMBER` is non-empty, append `Closes #${ISSUE_NUMBER}`.
    - Create a PR targeting `$DEVELOP_BRANCH` with a Conventional Commit title (e.g., `feat(<scope>): <summary>`):
      ```bash
-     gh pr create --base "$DEVELOP_BRANCH" --title "feat(<scope>): <summary>" --body "Implements spec \`specs/${FLOW_FEATURE_NAME}/spec.md\`."
+     PR_BODY="Implements spec \`specs/${FLOW_FEATURE_NAME}/spec.md\`."
+     if [ -n "$ISSUE_NUMBER" ]; then
+       PR_BODY="${PR_BODY}\n\nCloses #${ISSUE_NUMBER}"
+     fi
+     gh pr create --base "$DEVELOP_BRANCH" --title "feat(<scope>): <summary>" --body "$(printf '%b' "$PR_BODY")"
      ```
 2. **Finish locally with `git flow`**:
    - Ensure the merge commit message follows Conventional Commits so `.git/hooks/commit-msg` (`commitlint`) passes:

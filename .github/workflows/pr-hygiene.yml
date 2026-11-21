@@ -1,0 +1,81 @@
+name: "PR Hygiene (Commitlint, Git Flow & Auto-Label)"
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  pr-hygiene:
+    name: Validate PR Title, Git Flow Branch & Labels
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Validate PR Title (Conventional Commits)
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: amannn/action-semantic-pull-request@c5e23b7e584519ee15caa684cf60d056aa9f035f  # v6.1.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+
+      - name: Enforce Git Flow Branch Targeting
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$BASE_REF" = "main" ] && [[ ! "$HEAD_REF" =~ ^(release/|hotfix/|staging$) ]]; then
+            echo "::error::PRs targeting 'main' must come from release/*, hotfix/*, or staging (got '$HEAD_REF'). Target 'dev' instead."
+            exit 1
+          fi
+          if [ "$BASE_REF" = "dev" ] && [[ ! "$HEAD_REF" =~ ^(feature/|bugfix/|hotfix/|dependabot/|main$|staging$) ]]; then
+            echo "::error::PRs targeting 'dev' must come from feature/*, bugfix/*, hotfix/*, dependabot/*, main, or staging (got '$HEAD_REF')."
+            exit 1
+          fi
+          if [ "$BASE_REF" = "staging" ] && [[ ! "$HEAD_REF" =~ ^(dev$|release/|hotfix/) ]]; then
+            echo "::error::PRs targeting 'staging' must come from dev, release/*, or hotfix/* (got '$HEAD_REF')."
+            exit 1
+          fi
+
+      - name: Auto-Label PR from Branch & Title
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          LABELS=()
+          if [[ "$HEAD_REF" == feature/* ]] || [[ "$PR_TITLE" =~ ^feat(\([^)]+\))?!?: ]]; then
+            LABELS+=("enhancement")
+          fi
+          if [[ "$HEAD_REF" == bugfix/* ]] || [[ "$HEAD_REF" == hotfix/* ]] || [[ "$PR_TITLE" =~ ^fix(\([^)]+\))?!?: ]]; then
+            LABELS+=("bug")
+          fi
+          if [[ "$PR_TITLE" =~ ^docs(\([^)]+\))?!?: ]]; then
+            LABELS+=("documentation")
+          fi
+          if [[ "$HEAD_REF" == release/* ]]; then
+            LABELS+=("release")
+          fi
+
+          for label in "${LABELS[@]}"; do
+            gh pr edit "$PR_NUMBER" --add-label "$label" 2>/dev/null || echo "::warning::Could not apply label '$label'"
+          done

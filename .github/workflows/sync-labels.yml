@@ -1,0 +1,50 @@
+name: "Sync GitHub Labels"
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - ".github/labels.yml"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  sync-labels:
+    name: Sync Labels from .github/labels.yml
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Apply Declarative Labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          python3 - <<'PYEOF'
+          import subprocess
+          import yaml
+
+          with open(".github/labels.yml", "r", encoding="utf-8") as f:
+              labels = yaml.safe_load(f) or []
+
+          for item in labels:
+              name = item["name"]
+              color = str(item["color"]).lstrip("#")
+              desc = item.get("description", "")
+              subprocess.run(
+                  [
+                      "gh", "label", "create", name,
+                      "--color", color,
+                      "--description", desc,
+                      "--force",
+                  ],
+                  check=True,
+              )
+          PYEOF
