@@ -113,6 +113,14 @@ hooks:
     prompt: Commit specification changes?
     description: Auto-commit after specification
     condition: null
+  - extension: github
+    command: speckit.github.featureissue
+    enabled: true
+    optional: false
+    priority: 20
+    prompt: Create GitHub feature issue from specification?
+    description: Create or link GitHub feature issue after specification
+    condition: null
   after_clarify:
   - extension: git
     command: speckit.git.commit
@@ -201,4 +209,22 @@ hooks:
     priority: 20
     prompt: Finish verified Git Flow bugfix branch into dev (or open PR)?
     description: Finish Git Flow bugfix branch after bug verification passes
+    condition: null
+  after_bug_assess:
+  - extension: github
+    command: speckit.github.bugissue
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Create GitHub bug issue for validated bug assessment?
+    description: Create GitHub bug issue after bug assessment when verdict is valid
+    condition: null
+  after_assess_decide:
+  - extension: github
+    command: speckit.github.featureissue
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Create GitHub feature issue for approved (go) idea assessment?
+    description: Create GitHub feature issue after idea assessment returns a go verdict
     condition: null
