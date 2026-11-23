@@ -188,6 +188,76 @@ fn limit_get_set_and_validation() -> TestResult {
 }
 
 #[test]
+fn limit_set_rejects_non_finite_and_excessive_values() -> TestResult {
+    let sb = Sandbox::new("limit_bounds");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+    assert!(sb.cae(&["limit", "set", "0.30"]).status.success());
+
+    for bad in [
+        "NaN",
+        "inf",
+        "-inf",
+        "$-inf",
+        "1e15",
+        "1e300",
+        "1000000000.01",
+    ] {
+        let out = sb.cae(&["limit", "set", bad]);
+        assert!(
+            !out.status.success(),
+            "expected limit set '{bad}' to fail, got stdout: {}",
+            stdout(&out)
+        );
+    }
+
+    let after: serde_json::Value = serde_json::from_str(&stdout(&sb.cae(&["limit", "--json"])))?;
+    assert_eq!(after["daily_limit_usdc"], 0.3);
+
+    // Exact ceiling (1,000,000,000 USDC) is accepted.
+    let at_max = sb.cae(&["limit", "set", "1000000000"]);
+    assert!(at_max.status.success(), "{}", stderr(&at_max));
+    let max_json: serde_json::Value = serde_json::from_str(&stdout(&sb.cae(&["limit", "--json"])))?;
+    assert_eq!(max_json["daily_limit_usdc"], 1_000_000_000.0);
+    Ok(())
+}
+
+#[test]
+fn rollover_does_not_reset_spend_for_future_last_spend_date() -> TestResult {
+    let sb = Sandbox::new("rollover_monotonic");
+    fs::write(
+        sb.wallet_file(),
+        r#"{
+  "wallet_type": "cdp-embedded",
+  "evm_address": "0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c",
+  "email": "candidate@example.com",
+  "network": "base-sepolia",
+  "created_at": "2026-11-11T17:30:00Z",
+  "session_ref": "cdp_sess_example",
+  "encrypted_privkey": null,
+  "daily_limit_usdc": 0.15,
+  "spent_today_usdc": 0.09,
+  "last_spend_date": "2999-12-31"
+}"#,
+    )?;
+
+    let show: serde_json::Value = serde_json::from_str(&stdout(&sb.cae(&["show", "--json"])))?;
+    assert_eq!(show["spent_today_usdc"], 0.09);
+
+    let limit_json: serde_json::Value =
+        serde_json::from_str(&stdout(&sb.cae(&["limit", "--json"])))?;
+    assert_eq!(limit_json["spent_today_usdc"], 0.09);
+    let rem = limit_json["daily_remaining_usdc"]
+        .as_f64()
+        .ok_or("missing daily_remaining_usdc")?;
+    assert!((rem - 0.06).abs() < 1e-9, "unexpected remaining: {rem}");
+
+    let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(sb.wallet_file())?)?;
+    assert_eq!(stored["spent_today_usdc"], 0.09);
+    assert_eq!(stored["last_spend_date"], "2999-12-31");
+    Ok(())
+}
+
+#[test]
 fn export_key_requires_confirmation_or_force() -> TestResult {
     let sb = Sandbox::new("export");
     assert!(sb.cae(&["init", "--local"]).status.success());
@@ -252,7 +322,7 @@ fn export_key_is_refused_for_cdp_wallets() -> TestResult {
     assert_eq!(stored["spent_today_usdc"], 0.0);
     assert_eq!(
         stored["last_spend_date"],
-        chrono::Local::now().format("%Y-%m-%d").to_string()
+        chrono::Utc::now().format("%Y-%m-%d").to_string()
     );
     Ok(())
 }
