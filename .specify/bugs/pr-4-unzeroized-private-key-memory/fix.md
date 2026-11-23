@@ -3,8 +3,8 @@
 - **Slug**: pr-4-unzeroized-private-key-memory
 - **Fixed**: 2026-11-22
 - **Assessment**: ./assessment.md
-- **Status**: Fixed (Awaiting Verification)
-- **Commit SHA**: pending
+- **Status**: Verified
+- **Commit SHA**: `f5e675d`
 - **GitHub Issue**: #12
 
 ## Summary
