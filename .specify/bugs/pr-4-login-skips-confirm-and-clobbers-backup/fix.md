@@ -1,7 +1,7 @@
 # Bug Fix: pr-4-login-skips-confirm-and-clobbers-backup
-- **Status:** Fixed (Awaiting Verification)
+- **Status:** Verified
 - **Based On:** `.specify/bugs/pr-4-login-skips-confirm-and-clobbers-backup/assessment.md`
-- **Commit SHA:** `pending`
+- **Commit SHA:** `63d323a`
 - **GitHub Issue:** `#18`
 
 ## Summary of Changes
