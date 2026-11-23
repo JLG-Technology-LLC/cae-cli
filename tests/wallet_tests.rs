@@ -571,6 +571,103 @@ fn balance_without_wallet_exits_with_code_3() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn balance_succeeds_when_jsonrpc_error_is_null() -> TestResult {
+    let sb = Sandbox::new("balance_null_error");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock rpc");
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 2048];
+            let body = loop {
+                let n = stream.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    break String::new();
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some(idx) = text.find("\r\n\r\n") {
+                    let len = text[..idx]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if text.len() >= idx + 4 + len {
+                        break text[idx + 4..idx + 4 + len].to_string();
+                    }
+                }
+            };
+            let request: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+            let result = match request["method"].as_str().unwrap_or("") {
+                "eth_getBalance" => "0x11c37937e08000",
+                "eth_call" => "0x16e360",
+                _ => "0x0",
+            };
+            let payload = format!(r#"{{"jsonrpc":"2.0","id":1,"result":"{result}","error":null}}"#);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                payload.len(),
+                payload
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let out = sb.cae_with_rpc(&["balance", "--json"], &url);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out))?;
+    assert_eq!(json["eth_balance"], 0.005);
+    assert_eq!(json["usdc_balance"], 1.5);
+    Ok(())
+}
+
+#[test]
+fn rpc_and_faucet_errors_redact_url_secrets() -> TestResult {
+    let sb = Sandbox::new("redact_url_secrets");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+
+    let rpc_url =
+        "http://rpcuser:SECRET_RPC_PASS@127.0.0.1:1/v2/SECRET_RPC_PATH?api_key=SECRET_RPC_QUERY";
+    let rpc_out = sb.cae_with_rpc(&["balance"], rpc_url);
+    assert!(!rpc_out.status.success());
+    let rpc_err = stderr(&rpc_out);
+    assert!(rpc_err.contains("http://127.0.0.1:1"), "{rpc_err}");
+    for secret in [
+        "SECRET_RPC_PASS",
+        "SECRET_RPC_PATH",
+        "SECRET_RPC_QUERY",
+        "rpcuser",
+    ] {
+        assert!(!rpc_err.contains(secret), "leaked {secret} in: {rpc_err}");
+    }
+
+    let faucet_url =
+        "http://faucetuser:SECRET_FAUCET_PASS@127.0.0.1:1/v2/SECRET_FAUCET_PATH?token=SECRET_FAUCET_QUERY";
+    let faucet_out = run_fund_with_faucet_url(&sb, faucet_url);
+    assert!(!faucet_out.status.success());
+    let faucet_err = stderr(&faucet_out);
+    assert!(faucet_err.contains("http://127.0.0.1:1"), "{faucet_err}");
+    for secret in [
+        "SECRET_FAUCET_PASS",
+        "SECRET_FAUCET_PATH",
+        "SECRET_FAUCET_QUERY",
+        "faucetuser",
+    ] {
+        assert!(
+            !faucet_err.contains(secret),
+            "leaked {secret} in: {faucet_err}"
+        );
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Faucet (US3): testnet funding & mainnet refusal
 // ---------------------------------------------------------------------------

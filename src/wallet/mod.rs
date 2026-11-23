@@ -203,6 +203,21 @@ pub(crate) fn is_loopback_url(url: &str) -> bool {
         .is_ok_and(|ip| ip.is_loopback())
 }
 
+/// Format `raw` as `scheme://host[:port]`, stripping userinfo, path, query, and fragment
+/// so embedded API keys or credentials are never exposed in error messages or logs.
+pub(crate) fn sanitize_url(raw: &str) -> String {
+    let Ok(parsed) = reqwest::Url::parse(raw) else {
+        return "<invalid-url>".to_string();
+    };
+    let Some(host) = parsed.host_str() else {
+        return format!("{}://<redacted>", parsed.scheme());
+    };
+    match parsed.port() {
+        Some(port) => format!("{}://{}:{}", parsed.scheme(), host, port),
+        None => format!("{}://{}", parsed.scheme(), host),
+    }
+}
+
 fn require_profile(path: &Path) -> Result<CandidateWalletProfile> {
     load_profile(path)?.ok_or_else(|| WalletError::NoWallet.into())
 }
@@ -664,7 +679,7 @@ fn handle_export_key(force: bool, json_output: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_loopback_url;
+    use super::{is_loopback_url, sanitize_url};
 
     #[test]
     fn detects_ipv4_ipv6_and_localhost_loopback_urls() {
@@ -704,5 +719,31 @@ mod tests {
         assert!(!is_loopback_url("http://"));
         assert!(!is_loopback_url("localhost:8545"));
         assert!(!is_loopback_url("data:text/plain,localhost"));
+    }
+
+    #[test]
+    fn sanitize_url_strips_userinfo_path_query_and_fragment() {
+        assert_eq!(
+            sanitize_url("https://base-mainnet.g.alchemy.com/v2/SECRET_KEY"),
+            "https://base-mainnet.g.alchemy.com"
+        );
+        assert_eq!(
+            sanitize_url("https://user:secret@rpc.example.com:8443/v2/KEY?api_key=SECRET#frag"),
+            "https://rpc.example.com:8443"
+        );
+        assert_eq!(
+            sanitize_url("http://127.0.0.1:8545/?token=SECRET_TOKEN"),
+            "http://127.0.0.1:8545"
+        );
+        assert_eq!(
+            sanitize_url("http://user:pass@[::1]:8545/v2/KEY?q=1"),
+            "http://[::1]:8545"
+        );
+        assert_eq!(
+            sanitize_url("not a valid url with SECRET_KEY"),
+            "<invalid-url>"
+        );
+        assert_eq!(sanitize_url("://user:pass@host/SECRET"), "<invalid-url>");
+        assert_eq!(sanitize_url("data:text/plain,SECRET"), "data://<redacted>");
     }
 }

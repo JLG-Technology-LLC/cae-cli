@@ -110,24 +110,28 @@ fn rpc_call(
     method: &str,
     params: Value,
 ) -> Result<String> {
+    let safe_url = super::sanitize_url(url);
     let response: Value = client
         .post(url)
         .json(&json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}))
         .send()
-        .with_context(|| format!("Could not reach RPC endpoint {}", url))?
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| format!("Could not reach RPC endpoint {}", safe_url))?
         .error_for_status()
-        .with_context(|| format!("RPC endpoint {} returned an error status", url))?
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| format!("RPC endpoint {} returned an error status", safe_url))?
         .json()
-        .with_context(|| format!("RPC endpoint {} returned invalid JSON", url))?;
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| format!("RPC endpoint {} returned invalid JSON", safe_url))?;
 
-    if let Some(err) = response.get("error") {
-        bail!("RPC error from {}: {}", url, err);
+    if let Some(err) = response.get("error").filter(|v| !v.is_null()) {
+        bail!("RPC error from {}: {}", safe_url, err);
     }
     response
         .get("result")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| anyhow!("RPC response from {} had no result", url))
+        .ok_or_else(|| anyhow!("RPC response from {} had no result", safe_url))
 }
 
 /// Read native ETH and USDC balances (atomic units) for an address.

@@ -40,6 +40,7 @@ pub fn request_faucet(network: Network, address: &str, token: &str) -> Result<Fa
 
     let token_normalized = token.to_ascii_uppercase();
     let url = faucet_url();
+    let safe_url = super::sanitize_url(&url);
 
     let mut builder = reqwest::blocking::Client::builder().timeout(FAUCET_TIMEOUT);
     if super::is_loopback_url(&url) {
@@ -62,12 +63,15 @@ pub fn request_faucet(network: Network, address: &str, token: &str) -> Result<Fa
         }
     }
 
-    let response = req.send().with_context(|| {
-        format!(
-            "Could not reach CDP Faucet at {}. Check your connection or faucet relayer availability.",
-            url
-        )
-    })?;
+    let response = req
+        .send()
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| {
+            format!(
+                "Could not reach CDP Faucet at {}. Check your connection or faucet relayer availability.",
+                safe_url
+            )
+        })?;
 
     let status = response.status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -79,15 +83,24 @@ pub fn request_faucet(network: Network, address: &str, token: &str) -> Result<Fa
     let body = response
         .text()
         .map_err(reqwest::Error::without_url)
-        .with_context(|| format!("Failed to read response body from CDP Faucet at {}", url))?;
+        .with_context(|| {
+            format!(
+                "Failed to read response body from CDP Faucet at {}",
+                safe_url
+            )
+        })?;
 
     if !status.is_success() {
         let detail = extract_http_error_detail(&body, status);
         bail!("CDP Faucet returned HTTP {}: {}", status, detail);
     }
 
-    let res_json: serde_json::Value = serde_json::from_str(&body)
-        .with_context(|| format!("CDP Faucet endpoint {} returned non-JSON response", url))?;
+    let res_json: serde_json::Value = serde_json::from_str(&body).with_context(|| {
+        format!(
+            "CDP Faucet endpoint {} returned non-JSON response",
+            safe_url
+        )
+    })?;
 
     if let Some(err_str) = extract_faucet_error(&res_json) {
         bail!("CDP Faucet refused request: {}", err_str);
