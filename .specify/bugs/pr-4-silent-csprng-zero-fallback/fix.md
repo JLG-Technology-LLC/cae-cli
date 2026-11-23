@@ -3,8 +3,8 @@
 - **Slug**: pr-4-silent-csprng-zero-fallback
 - **Fixed**: 2026-11-22
 - **Assessment**: ./assessment.md
-- **Status**: Fixed (Awaiting Verification)
-- **Commit SHA**: pending
+- **Status**: Verified
+- **Commit SHA**: `de85f5b`
 - **GitHub Issue**: #13
 
 ## Summary
