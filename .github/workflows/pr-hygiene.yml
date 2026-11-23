@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
@@ -17,6 +16,10 @@ jobs:
     name: Validate PR Title, Git Flow Branch & Labels
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
     steps:
       - name: Validate PR Title (Conventional Commits)
         if: github.event.pull_request.user.login != 'dependabot[bot]'
@@ -56,8 +59,10 @@ jobs:
           fi
 
       - name: Auto-Label PR from Branch & Title
+        if: github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.head_ref }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -80,5 +85,17 @@ jobs:
           fi
 
           for label in "${LABELS[@]}"; do
-            gh pr edit "$PR_NUMBER" --add-label "$label" 2>/dev/null || echo "::warning::Could not apply label '$label'"
+            if ! err_output=$(gh pr edit "$PR_NUMBER" --repo "$GH_REPO" --add-label "$label" 2>&1); then
+              err_single_line="${err_output//$'\n'/ }"
+              if [[ "$err_output" == *"'$label' not found"* ]] \
+                || [[ "$err_output" == *"\"$label\" not found"* ]] \
+                || [[ "$err_output" == *"label $label not found"* ]] \
+                || [[ "$err_output" == *"'$label' does not exist"* ]] \
+                || [[ "$err_output" == *"\"$label\" does not exist"* ]]; then
+                echo "::warning::Could not apply missing label '$label' to PR #$PR_NUMBER: $err_single_line"
+              else
+                echo "::error::Failed to apply label '$label' to PR #$PR_NUMBER: $err_single_line" >&2
+                exit 1
+              fi
+            fi
           done
