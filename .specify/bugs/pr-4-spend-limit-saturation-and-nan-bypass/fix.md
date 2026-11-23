@@ -3,8 +3,8 @@
 - **Slug**: pr-4-spend-limit-saturation-and-nan-bypass
 - **Fixed**: 2026-11-22
 - **Assessment**: ./assessment.md
-- **Status**: Fixed (Awaiting Verification)
-- **Commit SHA**: pending
+- **Status**: Verified
+- **Commit SHA**: `7ef3894`
 - **GitHub Issue**: #14
 
 ## Summary
