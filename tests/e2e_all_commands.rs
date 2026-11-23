@@ -337,6 +337,49 @@ fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receive
     (url, rx)
 }
 
+fn spawn_mock_cdp_auth(expected_otp: &'static str, address: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock cdp auth");
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let req = read_http_request(&mut stream);
+            let first_line = req.lines().next().unwrap_or("");
+            let path = first_line.split_whitespace().nth(1).unwrap_or("");
+            let body = req.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+            let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+
+            let (status, payload) = if path == "/otp/initiate" {
+                ("200 OK", r#"{"flow_id":"flow_e2e_1"}"#.to_string())
+            } else if path == "/otp/verify" {
+                let otp = parsed["otp"].as_str().unwrap_or("");
+                let email = parsed["email"].as_str().unwrap_or("candidate@example.com");
+                if otp == expected_otp {
+                    (
+                        "200 OK",
+                        format!(
+                            r#"{{"evm_address":"{address}","email":"{email}","session_ref":"cdp_sess_e2e_otp"}}"#
+                        ),
+                    )
+                } else {
+                    ("401 Unauthorized", r#"{"error":"Invalid OTP"}"#.to_string())
+                }
+            } else {
+                ("404 Not Found", r#"{"error":"Not found"}"#.to_string())
+            };
+
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    url
+}
+
 #[test]
 fn test_ci_cd_all_commands_and_subcommands_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n========================================================");
@@ -698,11 +741,15 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() -> Result<(), Box<dyn st
     // 14. CDP User Auth, Backup, Enclave Guard & Logout: init, login, logout
     // -------------------------------------------------------------------------
     println!("[14/14] Testing CDP User Auth, Local Backup & Session Logout...");
-    // A. Terminal OTP flow with pipe
+    // A. Terminal OTP flow with pipe against mock CDP auth endpoint
     println!("\n$ cae wallet init --force --no-browser --json (terminal OTP)");
+    let mock_auth_url = spawn_mock_cdp_auth("123456", "0x53d2b9745a17a8c43b06c1e9c3848ea13f89a27c");
     let mut child = Command::new(TestHarness::bin())
         .args(["wallet", "init", "--force", "--no-browser", "--json"])
         .env("CAE_HOME", &h.home)
+        .env("CAE_CDP_AUTH_URL", &mock_auth_url)
+        .env("NO_PROXY", "*")
+        .env("no_proxy", "*")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -717,6 +764,10 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() -> Result<(), Box<dyn st
     assert_success(&otp_out, "cae wallet init (terminal OTP)");
     let cdp_val: serde_json::Value = serde_json::from_str(&stdout(&otp_out))?;
     assert_eq!(cdp_val["wallet_type"], "cdp-embedded");
+    assert_eq!(
+        cdp_val["evm_address"],
+        "0x53d2B9745A17A8c43b06c1E9c3848EA13F89A27C"
+    );
     assert_eq!(cdp_val["email"], "candidate@careerengine.local");
     assert_eq!(cdp_val["status"], "active");
 

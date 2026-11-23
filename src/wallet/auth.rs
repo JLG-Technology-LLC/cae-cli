@@ -330,8 +330,25 @@ fn handle_loopback_stream(
 }
 
 pub fn run_terminal_otp(email_opt: Option<String>) -> Result<AuthResult> {
+    let base_url = std::env::var("CAE_CDP_AUTH_URL")
+        .ok()
+        .map(|v| v.trim().trim_end_matches('/').to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            anyhow!(
+                "Headless terminal CDP OTP authentication requires a configured CDP auth endpoint (CAE_CDP_AUTH_URL). \
+                 Run `cae wallet init --local` for an offline cryptographically backed local wallet."
+            )
+        })?;
+
     let email = match email_opt {
-        Some(e) if !e.trim().is_empty() => e.trim().to_string(),
+        Some(e) if !e.trim().is_empty() => {
+            let trimmed = e.trim();
+            if !trimmed.contains('@') {
+                bail!("A valid email address is required for CDP User Auth");
+            }
+            trimmed.to_string()
+        }
         _ => {
             eprint!("Enter your candidate email: ");
             std::io::stderr().flush()?;
@@ -345,11 +362,48 @@ pub fn run_terminal_otp(email_opt: Option<String>) -> Result<AuthResult> {
         }
     };
 
+    let mut builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(15));
+    if super::is_loopback_url(&base_url) {
+        builder = builder.no_proxy();
+    }
+    let client = builder
+        .build()
+        .context("Building HTTP client for CDP authentication")?;
+
+    let initiate_url = format!("{}/otp/initiate", base_url);
+    let safe_initiate_url = super::sanitize_url(&initiate_url);
+
     eprintln!(
         "{} Dispatching 6-digit verification code to {}...",
         "→".cyan().bold(),
         email.yellow()
     );
+    let init_resp: serde_json::Value = client
+        .post(&initiate_url)
+        .json(&serde_json::json!({ "email": email }))
+        .send()
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| format!("Could not reach CDP auth endpoint {}", safe_initiate_url))?
+        .error_for_status()
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| {
+            format!(
+                "CDP auth endpoint {} rejected OTP initiation",
+                safe_initiate_url
+            )
+        })?
+        .json()
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| {
+            format!(
+                "CDP auth endpoint {} returned invalid JSON",
+                safe_initiate_url
+            )
+        })?;
+    let flow_id = init_resp
+        .get("flow_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
     // Prompt for OTP
     eprint!("Enter 6-digit verification code: ");
@@ -364,41 +418,91 @@ pub fn run_terminal_otp(email_opt: Option<String>) -> Result<AuthResult> {
 
     eprintln!("{} Verifying code...", "✔".green());
 
-    let session_ref = format!("cdp_sess_{}", hex::encode(crypto_random_bytes()?));
-    let evm_address = derive_address_for_email(&email);
+    let verify_url = format!("{}/otp/verify", base_url);
+    let safe_verify_url = super::sanitize_url(&verify_url);
+    let verify_resp: serde_json::Value = client
+        .post(&verify_url)
+        .json(&serde_json::json!({
+            "email": email,
+            "otp": trimmed_otp,
+            "flow_id": flow_id,
+        }))
+        .send()
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| format!("Could not reach CDP auth endpoint {}", safe_verify_url))?
+        .error_for_status()
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| format!("CDP OTP verification failed at {}", safe_verify_url))?
+        .json()
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| {
+            format!(
+                "CDP auth endpoint {} returned invalid JSON",
+                safe_verify_url
+            )
+        })?;
+
+    let raw_addr = verify_resp
+        .get("evm_address")
+        .or_else(|| verify_resp.get("address"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|addr| crate::wallet::crypto::is_valid_address(addr))
+        .ok_or_else(|| {
+            anyhow!(
+                "CDP auth response from {} did not include a valid evm_address",
+                safe_verify_url
+            )
+        })?;
+    let addr_bytes = hex::decode(&raw_addr[2..])
+        .map_err(|_| anyhow!("CDP auth response returned malformed EVM address hex"))?;
+    let evm_address = crate::wallet::crypto::to_checksum_address(&addr_bytes);
+
+    let session_ref = verify_resp
+        .get("session_ref")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow!(
+                "CDP auth response from {} did not include a session_ref",
+                safe_verify_url
+            )
+        })?
+        .to_string();
+
+    let verified_email = verify_resp
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.contains('@'))
+        .unwrap_or(&email)
+        .to_string();
 
     Ok(AuthResult {
         evm_address,
-        email,
+        email: verified_email,
         session_ref,
     })
 }
 
 fn generate_state_token() -> Result<String> {
-    let mut b = [0u8; 32];
-    getrandom::getrandom(&mut b)
-        .map_err(|e| anyhow!("Secure random number generator unavailable: {}", e))?;
+    let b = random_bytes::<32>()?;
     Ok(hex::encode(b))
 }
 
-fn crypto_random_bytes() -> Result<[u8; 16]> {
-    crypto_random_bytes_with(getrandom::getrandom)
+fn random_bytes<const N: usize>() -> Result<[u8; N]> {
+    random_bytes_with(getrandom::getrandom)
 }
 
-fn crypto_random_bytes_with<F, E>(fill: F) -> Result<[u8; 16]>
+fn random_bytes_with<const N: usize, F, E>(fill: F) -> Result<[u8; N]>
 where
     F: FnOnce(&mut [u8]) -> std::result::Result<(), E>,
     E: std::fmt::Display,
 {
-    let mut b = [0u8; 16];
+    let mut b = [0u8; N];
     fill(&mut b).map_err(|e| anyhow!("Secure random number generator unavailable: {}", e))?;
     Ok(b)
-}
-
-fn derive_address_for_email(email: &str) -> String {
-    use sha3::{Digest, Keccak256};
-    let hash = Keccak256::digest(email.as_bytes());
-    crate::wallet::crypto::to_checksum_address(&hash[12..])
 }
 
 /// Minimal HTML entity escaping for user/query parameters reflected in responses.
@@ -422,13 +526,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn derives_deterministic_valid_checksummed_address() {
-        let addr = derive_address_for_email("candidate@example.com");
-        assert!(crate::wallet::crypto::is_valid_address(&addr));
-        assert_eq!(addr, derive_address_for_email("candidate@example.com"));
-    }
-
-    #[test]
     fn test_html_escape_special_characters() {
         let malicious = "<script>alert('xss' & \"hello\")</script>";
         let escaped = html_escape(malicious);
@@ -444,8 +541,8 @@ mod tests {
 
     #[test]
     fn crypto_random_bytes_returns_non_zero_distinct_entropy() -> Result<()> {
-        let first = crypto_random_bytes()?;
-        let second = crypto_random_bytes()?;
+        let first = random_bytes::<16>()?;
+        let second = random_bytes::<16>()?;
         assert_ne!(first, [0u8; 16]);
         assert_ne!(second, [0u8; 16]);
         assert_ne!(first, second);
@@ -454,7 +551,7 @@ mod tests {
 
     #[test]
     fn crypto_random_bytes_propagates_csprng_error() {
-        let err = crypto_random_bytes_with(|_| Err("simulated rng failure"))
+        let err = random_bytes_with::<16, _, _>(|_| Err("simulated rng failure"))
             .expect_err("CSPRNG failure must return Err instead of all-zero fallback");
         let msg = err.to_string();
         assert!(msg.contains("Secure random number generator unavailable"));

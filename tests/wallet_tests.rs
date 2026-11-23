@@ -1210,12 +1210,60 @@ fn cdp_login_backs_up_active_local_wallet() -> TestResult {
     Ok(())
 }
 
+fn spawn_mock_cdp_auth(expected_otp: &'static str, address: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock cdp auth");
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let req = read_http_request(&mut stream);
+            let first_line = req.lines().next().unwrap_or("");
+            let path = first_line.split_whitespace().nth(1).unwrap_or("");
+            let body = req.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+            let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+
+            let (status, payload) = if path == "/otp/initiate" {
+                ("200 OK", r#"{"flow_id":"flow_test_123"}"#.to_string())
+            } else if path == "/otp/verify" {
+                let otp = parsed["otp"].as_str().unwrap_or("");
+                let email = parsed["email"].as_str().unwrap_or("candidate@example.com");
+                if otp == expected_otp {
+                    (
+                        "200 OK",
+                        format!(
+                            r#"{{"evm_address":"{address}","email":"{email}","session_ref":"cdp_sess_otp_verified"}}"#
+                        ),
+                    )
+                } else {
+                    ("401 Unauthorized", r#"{"error":"Invalid OTP"}"#.to_string())
+                }
+            } else {
+                ("404 Not Found", r#"{"error":"Not found"}"#.to_string())
+            };
+
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    url
+}
+
 #[test]
 fn cdp_init_terminal_otp() -> TestResult {
     let sb = Sandbox::new("cdp_otp");
+    // Pass lowercase hex to verify EIP-55 checksum normalization on server response.
+    let auth_url = spawn_mock_cdp_auth("123456", "0x53d2b9745a17a8c43b06c1e9c3848ea13f89a27c");
     let mut child = Command::new(env!("CARGO_BIN_EXE_cae"))
         .args(["wallet", "init", "--no-browser", "--json"])
         .env("CAE_HOME", &sb.home)
+        .env("CAE_CDP_AUTH_URL", &auth_url)
+        .env("NO_PROXY", "*")
+        .env("no_proxy", "*")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -1231,6 +1279,91 @@ fn cdp_init_terminal_otp() -> TestResult {
     let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("init json");
     assert_eq!(json["wallet_type"], "cdp-embedded");
     assert_eq!(json["email"], "candidate@example.com");
+    assert_eq!(
+        json["evm_address"],
+        "0x53d2B9745A17A8c43b06c1E9c3848EA13F89A27C"
+    );
     assert_eq!(json["status"], "active");
+
+    let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(sb.wallet_file())?)?;
+    assert_eq!(stored["session_ref"], "cdp_sess_otp_verified");
+    Ok(())
+}
+
+#[test]
+fn cdp_init_terminal_otp_without_endpoint_fails_closed() -> TestResult {
+    let sb = Sandbox::new("cdp_otp_no_url");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cae"))
+        .args(["wallet", "init", "--no-browser", "--json"])
+        .env("CAE_HOME", &sb.home)
+        .env_remove("CAE_CDP_AUTH_URL")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    {
+        let mut stdin = child.stdin.take().ok_or("missing stdin")?;
+        stdin.write_all(b"candidate@example.com\n123456\n")?;
+    }
+
+    let out = child.wait_with_output()?;
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("CAE_CDP_AUTH_URL"), "{err}");
+    assert!(err.contains("cae wallet init --local"), "{err}");
+    assert!(
+        !sb.wallet_file().exists(),
+        "wallet.json must not be created"
+    );
+    Ok(())
+}
+
+#[test]
+fn cdp_init_terminal_otp_rejects_bad_otp_and_malformed_server_address() -> TestResult {
+    let sb = Sandbox::new("cdp_otp_bad");
+    let auth_url = spawn_mock_cdp_auth("123456", "0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c");
+    let mut bad_otp = Command::new(env!("CARGO_BIN_EXE_cae"))
+        .args(["wallet", "init", "--no-browser", "--json"])
+        .env("CAE_HOME", &sb.home)
+        .env("CAE_CDP_AUTH_URL", &auth_url)
+        .env("NO_PROXY", "*")
+        .env("no_proxy", "*")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    {
+        let mut stdin = bad_otp.stdin.take().ok_or("missing stdin")?;
+        stdin.write_all(b"candidate@example.com\n999999\n")?;
+    }
+    let bad_out = bad_otp.wait_with_output()?;
+    assert!(!bad_out.status.success());
+    assert!(
+        !sb.wallet_file().exists(),
+        "wallet.json must not be created"
+    );
+
+    let bad_addr_url = spawn_mock_cdp_auth("123456", "not-an-evm-address");
+    let mut bad_addr = Command::new(env!("CARGO_BIN_EXE_cae"))
+        .args(["wallet", "init", "--no-browser", "--json"])
+        .env("CAE_HOME", &sb.home)
+        .env("CAE_CDP_AUTH_URL", &bad_addr_url)
+        .env("NO_PROXY", "*")
+        .env("no_proxy", "*")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    {
+        let mut stdin = bad_addr.stdin.take().ok_or("missing stdin")?;
+        stdin.write_all(b"candidate@example.com\n123456\n")?;
+    }
+    let bad_addr_out = bad_addr.wait_with_output()?;
+    assert!(!bad_addr_out.status.success());
+    assert!(
+        !sb.wallet_file().exists(),
+        "wallet.json must not be created"
+    );
     Ok(())
 }
