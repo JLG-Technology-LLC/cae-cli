@@ -42,7 +42,7 @@ pub fn request_faucet(network: Network, address: &str, token: &str) -> Result<Fa
     let url = faucet_url();
 
     let mut builder = reqwest::blocking::Client::builder().timeout(FAUCET_TIMEOUT);
-    if is_loopback_url(&url) {
+    if super::is_loopback_url(&url) {
         builder = builder.no_proxy();
     }
     let client = builder.build().context("Building HTTP client for faucet")?;
@@ -187,12 +187,6 @@ fn extract_http_error_detail(body: &str, status: reqwest::StatusCode) -> String 
     } else {
         truncate_snippet(trimmed, MAX_ERROR_SNIPPET_CHARS)
     }
-}
-
-fn is_loopback_url(url: &str) -> bool {
-    let rest = url.split("://").nth(1).unwrap_or(url);
-    let host = rest.split(['/', ':']).next().unwrap_or("");
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 pub fn print_faucet_receipt(receipt: &FaucetReceipt) {

@@ -183,6 +183,26 @@ pub fn confirm(question: &str) -> Result<bool> {
     Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
+/// Return `true` when `url` targets a loopback host (`localhost`, `127.0.0.0/8`, or `::1`).
+pub(crate) fn is_loopback_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let normalized = host.strip_suffix('.').unwrap_or(host);
+    if normalized.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
+}
+
 fn require_profile(path: &Path) -> Result<CandidateWalletProfile> {
     load_profile(path)?.ok_or_else(|| WalletError::NoWallet.into())
 }
@@ -640,4 +660,49 @@ fn handle_export_key(force: bool, json_output: bool) -> Result<()> {
         println!("{}", hex_key.as_str());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback_url;
+
+    #[test]
+    fn detects_ipv4_ipv6_and_localhost_loopback_urls() {
+        assert!(is_loopback_url("http://[::1]:8545"));
+        assert!(is_loopback_url("http://[::1]/rpc"));
+        assert!(is_loopback_url("https://[::1]:8443/v2"));
+        assert!(is_loopback_url("http://[0:0:0:0:0:0:0:1]:8545/rpc"));
+        assert!(is_loopback_url("http://localhost:8545/rpc"));
+        assert!(is_loopback_url("http://LOCALHOST:8545"));
+        assert!(is_loopback_url("http://localhost.:8545"));
+        assert!(is_loopback_url("http://user:pass@localhost:8545"));
+        assert!(is_loopback_url("http://user:pass@127.0.0.1:8545"));
+        assert!(is_loopback_url("http://user:pass@[::1]:8545/rpc"));
+        assert!(is_loopback_url("http://127.0.0.1:8545"));
+        assert!(is_loopback_url("http://127.0.0.2:8545"));
+        assert!(is_loopback_url("http://127.255.255.254:8545"));
+    }
+
+    #[test]
+    fn rejects_non_loopback_and_malformed_urls() {
+        assert!(!is_loopback_url("https://sepolia.base.org"));
+        assert!(!is_loopback_url("http://localhost.evil.com"));
+        assert!(!is_loopback_url("http://localhost.evil.com:8545"));
+        assert!(!is_loopback_url("https://127.0.0.1.example.com"));
+        assert!(!is_loopback_url("http://evil.com/localhost"));
+        assert!(!is_loopback_url(
+            "http://evil.com/?next=http://127.0.0.1:8545"
+        ));
+        assert!(!is_loopback_url("http://[::2]:8545"));
+        assert!(!is_loopback_url("http://0.0.0.0:8545"));
+        assert!(!is_loopback_url("http://192.168.1.1:8545"));
+        assert!(!is_loopback_url("http://localhost..:8545"));
+        assert!(!is_loopback_url(""));
+        assert!(!is_loopback_url("not-a-url"));
+        assert!(!is_loopback_url("://localhost:8545"));
+        assert!(!is_loopback_url("http://[::1"));
+        assert!(!is_loopback_url("http://"));
+        assert!(!is_loopback_url("localhost:8545"));
+        assert!(!is_loopback_url("data:text/plain,localhost"));
+    }
 }

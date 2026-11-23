@@ -130,17 +130,11 @@ fn rpc_call(
         .ok_or_else(|| anyhow!("RPC response from {} had no result", url))
 }
 
-fn is_loopback_url(url: &str) -> bool {
-    let rest = url.split("://").nth(1).unwrap_or(url);
-    let host = rest.split(['/', ':']).next().unwrap_or("");
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
-}
-
 /// Read native ETH and USDC balances (atomic units) for an address.
 pub fn fetch_balances(network: Network, address: &str) -> Result<(u128, u128)> {
     let url = rpc_url(network);
     let mut builder = reqwest::blocking::Client::builder().timeout(RPC_TIMEOUT);
-    if is_loopback_url(&url) {
+    if super::is_loopback_url(&url) {
         // Local/dev RPC nodes must never be routed through an HTTP(S) system proxy.
         builder = builder.no_proxy();
     }
@@ -215,14 +209,6 @@ mod tests {
         assert_eq!(json["balances"]["usdc"]["formatted"], "1.50 USDC");
         assert_eq!(json["balances"]["eth"]["formatted"], "0.0050 ETH");
         assert_eq!(json["tailoring"]["daily_remaining_usdc"], 0.12);
-    }
-
-    #[test]
-    fn detects_loopback_endpoints() {
-        assert!(is_loopback_url("http://127.0.0.1:8545"));
-        assert!(is_loopback_url("http://localhost:8545/rpc"));
-        assert!(!is_loopback_url("https://sepolia.base.org"));
-        assert!(!is_loopback_url("https://127.0.0.1.example.com"));
     }
 
     #[test]
