@@ -22,6 +22,7 @@ impl Sandbox {
             .arg("wallet")
             .args(args)
             .env("CAE_HOME", &self.home)
+            .env("CAE_SKIP_BROWSER_OPEN", "1")
             .stdin(std::process::Stdio::null())
             .output()
             .expect("run cae")
@@ -845,6 +846,7 @@ fn cdp_init_loopback_captures_auth_and_persists_embedded_profile() -> TestResult
         .env("CAE_HOME", &sb.home)
         .env("CAE_AUTH_PORT", port.to_string())
         .env("CAE_FORCE_BROWSER", "1")
+        .env("CAE_SKIP_BROWSER_OPEN", "1")
         .stdin(std::process::Stdio::null())
         .output()
         .expect("run cae init");
@@ -899,6 +901,7 @@ fn cdp_login_backs_up_active_local_wallet() -> TestResult {
         .env("CAE_HOME", &sb.home)
         .env("CAE_AUTH_PORT", port.to_string())
         .env("CAE_FORCE_BROWSER", "1")
+        .env("CAE_SKIP_BROWSER_OPEN", "1")
         .stdin(std::process::Stdio::null())
         .output()
         .expect("run cae login");
