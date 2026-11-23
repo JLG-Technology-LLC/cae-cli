@@ -3,8 +3,8 @@
 - **Slug**: pr-4-ipv6-loopback-url-check-broken
 - **Fixed**: 2026-11-22
 - **Assessment**: ./assessment.md
-- **Status**: Fixed (Awaiting Verification)
-- **Commit SHA**: pending
+- **Status**: Verified
+- **Commit SHA**: `004d623`
 - **GitHub Issue**: #15
 
 ## Summary
