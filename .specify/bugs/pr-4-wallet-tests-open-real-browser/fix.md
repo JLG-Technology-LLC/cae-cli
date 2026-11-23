@@ -3,8 +3,8 @@
 - **Slug**: pr-4-wallet-tests-open-real-browser
 - **Fixed**: 2026-11-22
 - **Assessment**: ./assessment.md
-- **Status**: Fixed (Awaiting Verification)
-- **Commit SHA**: pending
+- **Status**: Verified
+- **Commit SHA**: `373e155`
 - **GitHub Issue**: #20
 
 ## Summary
