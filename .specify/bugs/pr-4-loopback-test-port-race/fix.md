@@ -1,7 +1,7 @@
 # Bug Fix: pr-4-loopback-test-port-race
-- **Status:** Fixed (Awaiting Verification)
+- **Status:** Verified
 - **Based On:** `.specify/bugs/pr-4-loopback-test-port-race/assessment.md`
-- **Commit SHA:** `pending`
+- **Commit SHA:** `9c43eb5`
 - **GitHub Issue:** `#24`
 
 ## Summary of Changes
