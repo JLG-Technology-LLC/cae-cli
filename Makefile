@@ -42,9 +42,9 @@ docker-e2e: docker-build-test
 semgrep-scan:
 	@echo "Running Semgrep SAST security scan for Rust..."
 	@if command -v semgrep >/dev/null 2>&1; then \
-		semgrep scan --config auto --severity=WARNING --error; \
+		semgrep scan --config auto --severity=WARNING --severity=ERROR --error; \
 	else \
-		docker run --rm -v "$(CURDIR):/src" semgrep/semgrep:1.185.0 semgrep scan --config auto --severity=WARNING --error; \
+		docker run --rm -v "$(CURDIR):/src" semgrep/semgrep:1.185.0 semgrep scan --config auto --severity=WARNING --severity=ERROR --error; \
 	fi
 
 trivy-scan:

@@ -500,7 +500,7 @@ Scans Rust source files against automated static analysis rulesets:
 make semgrep-scan
 ```
 
-*(Runs `semgrep scan --config auto --severity=WARNING --error`, automatically falling back to Docker if `semgrep` is not locally installed).*
+*(Runs `semgrep scan --config auto --severity=WARNING --severity=ERROR --error`, automatically falling back to Docker if `semgrep` is not locally installed).*
 
 ### 2. Trivy Filesystem Scanning
 

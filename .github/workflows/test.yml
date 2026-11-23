@@ -61,7 +61,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Run Semgrep SAST Security Gate
-        run: semgrep scan --config auto --severity=WARNING --error
+        run: semgrep scan --config auto --severity=WARNING --severity=ERROR --error
 
   trivy-fs:
     name: Trivy Filesystem Scan (Cargo Vuln, Secret & Misconfig)
