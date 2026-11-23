@@ -26,8 +26,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
-          python3 - <<'PYEOF'
+          PYTHON="python3"
+          if ! "$PYTHON" -c "import yaml" 2>/dev/null; then
+            VENV="${RUNNER_TEMP:-/tmp}/yaml-venv"
+            python3 -m venv "$VENV"
+            "$VENV/bin/python" -m pip install --quiet pyyaml
+            PYTHON="$VENV/bin/python"
+          fi
+          "$PYTHON" - <<'PYEOF'
           import subprocess
           import yaml
 
