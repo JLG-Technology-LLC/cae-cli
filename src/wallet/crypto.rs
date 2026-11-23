@@ -2,10 +2,11 @@ use anyhow::{anyhow, Result};
 use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::SecretKey;
 use sha3::{Digest, Keccak256};
+use zeroize::Zeroizing;
 
 pub struct LocalKey {
-    /// Lowercase hex, no `0x` prefix.
-    pub private_key_hex: String,
+    /// Lowercase hex, no `0x` prefix. Automatically zeroized on drop.
+    pub private_key_hex: Zeroizing<String>,
     /// EIP-55 checksummed `0x…` address.
     pub address: String,
 }
@@ -15,12 +16,12 @@ pub fn generate_local_key() -> Result<LocalKey> {
     // A random 32-byte string is outside the curve order with negligible probability;
     // retry defensively rather than panic.
     for _ in 0..16 {
-        let mut bytes = [0u8; 32];
-        getrandom::getrandom(&mut bytes)
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        getrandom::getrandom(bytes.as_mut_slice())
             .map_err(|e| anyhow!("Secure random number generator unavailable: {}", e))?;
-        if let Ok(secret) = SecretKey::from_slice(&bytes) {
+        if let Ok(secret) = SecretKey::from_slice(bytes.as_slice()) {
             return Ok(LocalKey {
-                private_key_hex: hex::encode(bytes),
+                private_key_hex: Zeroizing::new(hex::encode(bytes.as_slice())),
                 address: address_from_secret(&secret),
             });
         }
@@ -39,9 +40,10 @@ pub fn address_from_secret(secret: &SecretKey) -> String {
 /// Derive the checksummed address from a hex private key (with or without `0x`).
 pub fn address_from_private_key_hex(private_key_hex: &str) -> Result<String> {
     let raw = private_key_hex.trim_start_matches("0x");
-    let bytes = hex::decode(raw).map_err(|_| anyhow!("Private key is not valid hex"))?;
-    let secret =
-        SecretKey::from_slice(&bytes).map_err(|_| anyhow!("Private key is not a valid scalar"))?;
+    let bytes =
+        Zeroizing::new(hex::decode(raw).map_err(|_| anyhow!("Private key is not valid hex"))?);
+    let secret = SecretKey::from_slice(bytes.as_slice())
+        .map_err(|_| anyhow!("Private key is not a valid scalar"))?;
     Ok(address_from_secret(&secret))
 }
 
@@ -101,7 +103,32 @@ mod tests {
         assert!(is_valid_address(&a.address));
         assert_eq!(a.private_key_hex.len(), 64);
         assert_ne!(a.private_key_hex, b.private_key_hex);
-        assert_eq!(address_from_private_key_hex(&a.private_key_hex)?, a.address);
+        assert_eq!(
+            address_from_private_key_hex(a.private_key_hex.as_str())?,
+            a.address
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_key_private_hex_is_zeroizing_and_clears_on_zeroize() -> Result<()> {
+        use zeroize::Zeroize;
+
+        let mut key = generate_local_key()?;
+        let hex_guard: &Zeroizing<String> = &key.private_key_hex;
+        assert_eq!(hex_guard.len(), 64);
+
+        key.private_key_hex.zeroize();
+        assert!(key.private_key_hex.is_empty());
+        assert!(is_valid_address(&key.address));
+
+        let mut raw = Zeroizing::new([0xAAu8; 32]);
+        raw.zeroize();
+        assert_eq!(*raw, [0u8; 32]);
+
+        let mut decoded = Zeroizing::new(vec![0xBBu8; 32]);
+        decoded.zeroize();
+        assert!(decoded.is_empty());
         Ok(())
     }
 

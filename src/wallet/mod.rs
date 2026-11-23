@@ -13,6 +13,7 @@ use serde_json::json;
 use std::fmt;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
+use zeroize::{Zeroize, Zeroizing};
 
 use profile::{
     backup_local_path, backup_local_profile, backup_profile, load_profile, save_profile,
@@ -248,11 +249,12 @@ fn handle_init(args: InitArgs) -> Result<()> {
             network: args.network,
             created_at: Utc::now().to_rfc3339(),
             session_ref: None,
-            encrypted_privkey: Some(key.private_key_hex),
+            encrypted_privkey: Some(key.private_key_hex.as_str().to_owned()),
             daily_limit_usdc: DEFAULT_DAILY_LIMIT_USDC,
             spent_today_usdc: 0.0,
             last_spend_date: limit::today(),
         };
+        drop(key.private_key_hex);
         save_profile(&path, &profile)?;
 
         if args.json {
@@ -324,12 +326,12 @@ fn handle_login(args: LoginArgs) -> Result<()> {
     }
 
     let auth_res = auth::authenticate_user(args.email, args.no_browser, args.json)?;
-    let (network, daily_limit, spent_today, last_spend) = match existing {
+    let (network, daily_limit, spent_today, last_spend) = match existing.as_ref() {
         Some(p) => (
             p.network,
             p.daily_limit_usdc,
             p.spent_today_usdc,
-            p.last_spend_date,
+            p.last_spend_date.clone(),
         ),
         None => (
             Network::BaseSepolia,
@@ -338,6 +340,7 @@ fn handle_login(args: LoginArgs) -> Result<()> {
             limit::today(),
         ),
     };
+    drop(existing);
 
     let profile = CandidateWalletProfile {
         wallet_type: WalletType::CdpEmbedded,
@@ -506,7 +509,10 @@ fn handle_logout(json_output: bool) -> Result<()> {
     if profile.wallet_type != WalletType::CdpEmbedded {
         bail!("The active wallet is a local-eoa wallet; there is no CDP session to log out of.");
     }
-    let had_session = profile.session_ref.take().is_some();
+    let had_session = profile.session_ref.is_some();
+    if let Some(mut session) = profile.session_ref.take() {
+        session.zeroize();
+    }
     save_profile(&path, &profile)?;
 
     if json_output {
@@ -618,17 +624,20 @@ fn handle_export_key(force: bool, json_output: bool) -> Result<()> {
         }
     }
 
-    let hex_key = format!("0x{}", key.trim_start_matches("0x"));
+    let hex_key = Zeroizing::new(format!("0x{}", key.trim_start_matches("0x")));
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "evm_address": profile.evm_address,
-                "private_key": hex_key,
-            }))?
-        );
+        #[derive(serde::Serialize)]
+        struct ExportKeyPayload<'a> {
+            evm_address: &'a str,
+            private_key: &'a str,
+        }
+        let payload = Zeroizing::new(serde_json::to_string_pretty(&ExportKeyPayload {
+            evm_address: &profile.evm_address,
+            private_key: hex_key.as_str(),
+        })?);
+        println!("{}", payload.as_str());
     } else {
-        println!("{}", hex_key);
+        println!("{}", hex_key.as_str());
     }
     Ok(())
 }

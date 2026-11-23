@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::ledger::normalize_home_dir;
 
@@ -82,6 +83,19 @@ pub struct CandidateWalletProfile {
     pub last_spend_date: String,
 }
 
+impl CandidateWalletProfile {
+    fn zeroize_secrets(&mut self) {
+        self.encrypted_privkey.zeroize();
+        self.session_ref.zeroize();
+    }
+}
+
+impl Drop for CandidateWalletProfile {
+    fn drop(&mut self) {
+        self.zeroize_secrets();
+    }
+}
+
 /// Resolve the wallet file location: `$CAE_HOME/wallet.json` when `CAE_HOME` is set,
 /// otherwise `~/.cae/wallet.json`.
 pub fn wallet_path() -> Result<PathBuf> {
@@ -113,9 +127,10 @@ pub fn load_profile(path: &Path) -> Result<Option<CandidateWalletProfile>> {
     if !path.exists() {
         return Ok(None);
     }
-    let raw =
-        fs::read_to_string(path).with_context(|| format!("Reading wallet {}", path.display()))?;
-    let profile: CandidateWalletProfile = serde_json::from_str(&raw)
+    let raw = Zeroizing::new(
+        fs::read_to_string(path).with_context(|| format!("Reading wallet {}", path.display()))?,
+    );
+    let profile: CandidateWalletProfile = serde_json::from_str(raw.as_str())
         .with_context(|| format!("Parsing wallet profile {}", path.display()))?;
     if !crate::wallet::crypto::is_valid_address(&profile.evm_address) {
         return Err(anyhow!(
@@ -129,23 +144,27 @@ pub fn load_profile(path: &Path) -> Result<Option<CandidateWalletProfile>> {
 
 /// Atomically persist the profile (temp file + rename) with `0600` permissions.
 pub fn save_profile(path: &Path, profile: &CandidateWalletProfile) -> Result<()> {
-    let json = serde_json::to_string_pretty(profile)?;
+    let json = Zeroizing::new(serde_json::to_string_pretty(profile)?);
     write_private_file(path, json.as_bytes())
 }
 
 /// Copy the current wallet file to `<path>.bak` with `0600` permissions.
 pub fn backup_profile(path: &Path) -> Result<PathBuf> {
-    let bytes = fs::read(path).with_context(|| format!("Reading wallet {}", path.display()))?;
+    let bytes = Zeroizing::new(
+        fs::read(path).with_context(|| format!("Reading wallet {}", path.display()))?,
+    );
     let dest = backup_path(path);
-    write_private_file(&dest, &bytes)?;
+    write_private_file(&dest, bytes.as_slice())?;
     Ok(dest)
 }
 
 /// Copy the current wallet file to `wallet.local.bak` with `0600` permissions.
 pub fn backup_local_profile(path: &Path) -> Result<PathBuf> {
-    let bytes = fs::read(path).with_context(|| format!("Reading wallet {}", path.display()))?;
+    let bytes = Zeroizing::new(
+        fs::read(path).with_context(|| format!("Reading wallet {}", path.display()))?,
+    );
     let dest = backup_local_path(path);
-    write_private_file(&dest, &bytes)?;
+    write_private_file(&dest, bytes.as_slice())?;
     Ok(dest)
 }
 
@@ -195,8 +214,9 @@ fn create_private_temp(path: &Path) -> Result<(PathBuf, fs::File)> {
             Ok(file) => return Ok((tmp_path, file)),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(err) => {
-                return Err(anyhow::Error::new(err)
-                    .context(format!("Creating {}", tmp_path.display())));
+                return Err(
+                    anyhow::Error::new(err).context(format!("Creating {}", tmp_path.display()))
+                );
             }
         }
     }
@@ -467,5 +487,34 @@ pub(crate) mod tests {
 
         let _ = fs::remove_dir_all(&dir);
         Ok(())
+    }
+
+    #[test]
+    fn zeroizes_secret_fields_before_drop() {
+        assert!(std::mem::needs_drop::<CandidateWalletProfile>());
+
+        let mut profile = sample();
+        profile.session_ref = Some("cdp_sess_secret_token".to_string());
+        assert!(profile
+            .encrypted_privkey
+            .as_deref()
+            .is_some_and(|s| !s.is_empty()));
+        assert!(profile
+            .session_ref
+            .as_deref()
+            .is_some_and(|s| !s.is_empty()));
+
+        profile.zeroize_secrets();
+        assert_eq!(profile.encrypted_privkey, None);
+        assert_eq!(profile.session_ref, None);
+        assert_eq!(
+            profile.evm_address,
+            "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+        );
+
+        let mut without_secrets = sample();
+        without_secrets.encrypted_privkey = None;
+        without_secrets.session_ref = None;
+        drop(without_secrets);
     }
 }
