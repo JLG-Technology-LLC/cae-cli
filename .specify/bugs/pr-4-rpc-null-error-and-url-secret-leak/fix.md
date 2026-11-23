@@ -1,7 +1,7 @@
 # Bug Fix: pr-4-rpc-null-error-and-url-secret-leak
-- **Status:** Fixed (Awaiting Verification)
+- **Status:** Verified
 - **Based On:** `.specify/bugs/pr-4-rpc-null-error-and-url-secret-leak/assessment.md`
-- **Commit SHA:** `pending`
+- **Commit SHA:** `fe8773c`
 - **GitHub Issue:** `#16`
 
 ## Summary of Changes
