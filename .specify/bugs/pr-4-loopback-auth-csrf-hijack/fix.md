@@ -1,7 +1,7 @@
 # Bug Fix: pr-4-loopback-auth-csrf-hijack
-- **Status:** Fixed (Awaiting Verification)
+- **Status:** Verified
 - **Based On:** `.specify/bugs/pr-4-loopback-auth-csrf-hijack/assessment.md`
-- **Commit SHA:** `pending`
+- **Commit SHA:** `dc8ed84`
 - **GitHub Issue:** `#6`
 
 ## Summary of Changes
