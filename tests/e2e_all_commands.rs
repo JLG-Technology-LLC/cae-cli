@@ -754,6 +754,9 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() -> Result<(), Box<dyn st
                         .split_whitespace()
                         .next()
                         .unwrap_or("")
+                        .split('\x1b')
+                        .next()
+                        .unwrap_or("")
                         .trim_end_matches(|c: char| {
                             !c.is_ascii_alphanumeric()
                                 && c != '/'
@@ -787,11 +790,19 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() -> Result<(), Box<dyn st
         .next()
         .unwrap_or("");
     let port: u16 = port_str.parse()?;
+    let state = auth_url
+        .split_once('?')
+        .and_then(|(_, q)| q.split('&').find_map(|p| p.strip_prefix("state=")))
+        .filter(|s| !s.is_empty())
+        .ok_or("missing state parameter in loopback URL")?
+        .to_string();
 
     let callback_handle = std::thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port))
             .unwrap_or_else(|e| panic!("connect to loopback port {port} failed: {e}"));
-        let req = "GET /callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=synced@example.com&session_ref=cdp_sess_verified HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let req = format!(
+            "GET /callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=synced@example.com&session_ref=cdp_sess_verified&state={state} HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        );
         stream.write_all(req.as_bytes()).expect("write callback");
         stream.flush().expect("flush callback");
         let mut response = String::new();

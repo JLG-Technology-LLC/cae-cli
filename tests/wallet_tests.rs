@@ -1021,6 +1021,9 @@ fn extract_loopback_url_from_stderr(
                         .split_whitespace()
                         .next()
                         .unwrap_or("")
+                        .split('\x1b')
+                        .next()
+                        .unwrap_or("")
                         .trim_end_matches(|c: char| {
                             !c.is_ascii_alphanumeric()
                                 && c != '/'
@@ -1046,12 +1049,20 @@ fn extract_loopback_url_from_stderr(
     (rx, handle)
 }
 
-fn parse_loopback_port(url: &str) -> Result<u16, Box<dyn std::error::Error>> {
+fn parse_loopback_port_and_state(url: &str) -> Result<(u16, String), Box<dyn std::error::Error>> {
     let parsed = url
         .strip_prefix("http://localhost:")
         .ok_or("missing http://localhost: prefix")?;
     let port_str = parsed.split(['/', '?']).next().unwrap_or("");
-    Ok(port_str.parse::<u16>()?)
+    let port = port_str.parse::<u16>()?;
+    let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let state = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("state="))
+        .filter(|s| !s.is_empty())
+        .ok_or("missing state query parameter in loopback URL")?
+        .to_string();
+    Ok((port, state))
 }
 
 fn send_loopback_callback(port: u16, path_and_query: String) -> std::thread::JoinHandle<String> {
@@ -1091,11 +1102,30 @@ fn cdp_init_loopback_captures_auth_and_persists_embedded_profile() -> TestResult
     let url = url_rx
         .recv_timeout(std::time::Duration::from_secs(10))
         .map_err(|_| "timeout waiting for loopback URL on stderr")?;
-    let port = parse_loopback_port(&url)?;
+    let (port, state) = parse_loopback_port_and_state(&url)?;
+
+    let forged_resp = send_loopback_callback(
+        port,
+        "/callback?address=0x9999999999999999999999999999999999999999&email=evil@attacker.test&session_ref=hijacked".to_string(),
+    )
+    .join()
+    .expect("forged callback thread panicked");
+    assert!(
+        forged_resp.starts_with("HTTP/1.1 403 Forbidden"),
+        "{forged_resp}"
+    );
+
+    let robots_resp = send_loopback_callback(port, "/robots.txt".to_string())
+        .join()
+        .expect("robots thread panicked");
+    assert!(
+        robots_resp.starts_with("HTTP/1.1 404 Not Found"),
+        "{robots_resp}"
+    );
 
     let callback_handle = send_loopback_callback(
         port,
-        "/callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=candidate@example.com&session_ref=cdp_sess_token123".to_string(),
+        format!("/callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=candidate%2Btest%40example.com&session_ref=cdp_sess_token123&state={state}"),
     );
     let http_response = callback_handle.join().expect("callback thread panicked");
     assert!(
@@ -1113,7 +1143,7 @@ fn cdp_init_loopback_captures_auth_and_persists_embedded_profile() -> TestResult
         json["evm_address"],
         "0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c"
     );
-    assert_eq!(json["email"], "candidate@example.com");
+    assert_eq!(json["email"], "candidate+test@example.com");
     assert_eq!(json["network"], "base-sepolia");
     assert_eq!(json["status"], "active");
 
@@ -1145,11 +1175,11 @@ fn cdp_login_backs_up_active_local_wallet() -> TestResult {
     let url = url_rx
         .recv_timeout(std::time::Duration::from_secs(10))
         .map_err(|_| "timeout waiting for loopback URL on stderr")?;
-    let port = parse_loopback_port(&url)?;
+    let (port, state) = parse_loopback_port_and_state(&url)?;
 
     let callback_handle = send_loopback_callback(
         port,
-        "/callback?address=0x1111111111111111111111111111111111111111&email=new@example.com&session_ref=cdp_sess_new".to_string(),
+        format!("/callback?address=0x1111111111111111111111111111111111111111&email=new@example.com&session_ref=cdp_sess_new&state={state}"),
     );
     let http_response = callback_handle.join().expect("callback thread panicked");
     assert!(

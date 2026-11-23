@@ -5,6 +5,7 @@ use std::io::{BufRead, IsTerminal, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::Command;
 use std::time::Duration;
+use subtle::ConstantTimeEq;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct AuthResult {
@@ -87,7 +88,8 @@ pub fn run_loopback_auth(port: u16, email_hint: Option<String>) -> Result<AuthRe
         .set_nonblocking(true)
         .context("Setting listener non-blocking mode")?;
 
-    let url = format!("http://localhost:{}/", bound_port);
+    let expected_state = generate_state_token()?;
+    let url = format!("http://localhost:{}/?state={}", bound_port, expected_state);
     eprintln!(
         "{} Opening authentication flow in your browser at: {}",
         "→".cyan().bold(),
@@ -107,7 +109,7 @@ pub fn run_loopback_auth(port: u16, email_hint: Option<String>) -> Result<AuthRe
                 stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
                 stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
 
-                match handle_loopback_stream(&mut stream, email_hint.clone()) {
+                match handle_loopback_stream(&mut stream, email_hint.clone(), &expected_state) {
                     Ok(Some(auth_result)) => return Ok(auth_result),
                     Ok(None) => {}
                     Err(e) => {
@@ -149,21 +151,46 @@ fn open_browser(url: &str) -> Result<()> {
     Ok(())
 }
 
+fn send_http_text(stream: &mut TcpStream, status: &str, extra_headers: &str, body: &str) {
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
+}
+
 fn handle_loopback_stream(
     stream: &mut TcpStream,
     email_hint: Option<String>,
+    expected_state: &str,
 ) -> Result<Option<AuthResult>> {
     let mut buffer = [0u8; 4096];
     let n = stream.read(&mut buffer).unwrap_or(0);
+    if n == 0 {
+        return Ok(None);
+    }
     let request_str = String::from_utf8_lossy(&buffer[..n]);
 
     let first_line = request_str.lines().next().unwrap_or("");
-    let path = first_line.split_whitespace().nth(1).unwrap_or("/");
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("");
+
+    if method != "GET" {
+        send_http_text(
+            stream,
+            "405 Method Not Allowed",
+            "Allow: GET\r\n",
+            "Method Not Allowed",
+        );
+        return Ok(None);
+    }
 
     let (route, query_str) = path.split_once('?').unwrap_or((path, ""));
 
-    // If client requested root landing page or favicon without query params, serve page and wait for callback
-    if (route == "/" || route == "/index.html" || route == "/favicon.ico") && query_str.is_empty() {
+    // Serve the portal landing page without completing authentication.
+    if route == "/" || route == "/index.html" {
         let landing_body = r#"<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Career Asset Engine</title></head>
@@ -182,37 +209,80 @@ fn handle_loopback_stream(
         return Ok(None);
     }
 
-    let mut query_params = std::collections::HashMap::new();
-    for pair in query_str.split('&') {
-        if let Some((k, v)) = pair.split_once('=') {
-            if !k.is_empty() {
-                query_params.insert(k.to_string(), v.to_string());
-            }
-        }
+    if route != "/callback" {
+        send_http_text(stream, "404 Not Found", "", "Not Found");
+        return Ok(None);
     }
 
-    // Extract address, email, session_ref from query params or form
-    let email = query_params
-        .get("email")
-        .cloned()
-        .or(email_hint)
-        .unwrap_or_else(|| "candidate@example.com".to_string());
+    let query_params: std::collections::HashMap<String, String> =
+        url::form_urlencoded::parse(query_str.as_bytes())
+            .into_owned()
+            .collect();
 
-    let raw_session_ref = query_params
-        .get("session_ref")
-        .or_else(|| query_params.get("token"));
-    let session_ref = match raw_session_ref {
-        Some(token) => token.clone(),
-        None => format!("cdp_sess_{}", hex::encode(crypto_random_bytes()?)),
+    let provided_state = query_params.get("state").map(String::as_str).unwrap_or("");
+    if provided_state.is_empty()
+        || !bool::from(provided_state.as_bytes().ct_eq(expected_state.as_bytes()))
+    {
+        send_http_text(
+            stream,
+            "403 Forbidden",
+            "",
+            "Invalid or missing CSRF state token",
+        );
+        return Ok(None);
+    }
+
+    let email = match query_params.get("email") {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || !trimmed.contains('@') {
+                send_http_text(stream, "400 Bad Request", "", "Invalid email parameter");
+                return Ok(None);
+            }
+            trimmed.to_string()
+        }
+        None => match email_hint.as_deref().map(str::trim) {
+            Some(hint) if !hint.is_empty() && hint.contains('@') => hint.to_string(),
+            _ => {
+                send_http_text(stream, "400 Bad Request", "", "Missing email parameter");
+                return Ok(None);
+            }
+        },
     };
 
-    let raw_address = query_params
-        .get("address")
-        .or_else(|| query_params.get("evm_address"));
+    let session_ref = match query_params
+        .get("session_ref")
+        .or_else(|| query_params.get("token"))
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        Some(token) => token.to_string(),
+        None => {
+            send_http_text(
+                stream,
+                "400 Bad Request",
+                "",
+                "Missing session_ref parameter",
+            );
+            return Ok(None);
+        }
+    };
 
-    let evm_address = match raw_address {
-        Some(addr) if crate::wallet::crypto::is_valid_address(addr) => addr.clone(),
-        _ => derive_address_for_email(&email),
+    let evm_address = match query_params
+        .get("address")
+        .or_else(|| query_params.get("evm_address"))
+        .map(|s| s.trim())
+    {
+        Some(addr) if crate::wallet::crypto::is_valid_address(addr) => addr.to_string(),
+        _ => {
+            send_http_text(
+                stream,
+                "400 Bad Request",
+                "",
+                "Missing or invalid EVM address parameter",
+            );
+            return Ok(None);
+        }
     };
 
     let escaped_address = html_escape(&evm_address);
@@ -304,6 +374,13 @@ pub fn run_terminal_otp(email_opt: Option<String>) -> Result<AuthResult> {
     })
 }
 
+fn generate_state_token() -> Result<String> {
+    let mut b = [0u8; 32];
+    getrandom::getrandom(&mut b)
+        .map_err(|e| anyhow!("Secure random number generator unavailable: {}", e))?;
+    Ok(hex::encode(b))
+}
+
 fn crypto_random_bytes() -> Result<[u8; 16]> {
     crypto_random_bytes_with(getrandom::getrandom)
 }
@@ -390,14 +467,19 @@ mod tests {
         let bound_port = listener.local_addr()?.port();
         assert_ne!(bound_port, 0);
 
+        let expected_state = "a".repeat(64);
+        let state_for_server = expected_state.clone();
         let handle = std::thread::spawn(move || -> Result<AuthResult> {
             let (mut stream, _) = listener.accept()?;
-            handle_loopback_stream(&mut stream, None)?
+            handle_loopback_stream(&mut stream, None, &state_for_server)?
                 .ok_or_else(|| anyhow!("Expected callback auth result"))
         });
 
         let mut stream = TcpStream::connect(("127.0.0.1", bound_port))?;
-        let req = "GET /callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=ephemeral@example.com&session_ref=cdp_sess_ephemeral HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let req = format!(
+            "GET /callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=ephemeral@example.com&session_ref=cdp_sess_ephemeral&state={} HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            expected_state
+        );
         stream.write_all(req.as_bytes())?;
         stream.flush()?;
 
@@ -414,6 +496,101 @@ mod tests {
         );
         assert_eq!(auth.email, "ephemeral@example.com");
         assert_eq!(auth.session_ref, "cdp_sess_ephemeral");
+        Ok(())
+    }
+
+    fn send_raw_loopback_request(
+        raw_req: &str,
+        expected_state: &str,
+    ) -> Result<(String, Option<AuthResult>)> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        let state_owned = expected_state.to_string();
+        let server = std::thread::spawn(move || -> Result<Option<AuthResult>> {
+            let (mut stream, _) = listener.accept()?;
+            handle_loopback_stream(&mut stream, None, &state_owned)
+        });
+
+        let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+        stream.write_all(raw_req.as_bytes())?;
+        stream.flush()?;
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp)?;
+        let res = server
+            .join()
+            .map_err(|_| anyhow!("loopback handler thread panicked"))??;
+        Ok((resp, res))
+    }
+
+    #[test]
+    fn loopback_rejects_csrf_ancillary_paths_non_get_and_missing_params() -> Result<()> {
+        let state = generate_state_token()?;
+        let valid_addr = "0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c";
+
+        // Missing or wrong CSRF state -> 403 Forbidden + Ok(None)
+        let (resp, res) = send_raw_loopback_request(
+            &format!("GET /callback?address={valid_addr}&email=a@b.com&session_ref=s1 HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+            &state,
+        )?;
+        assert!(resp.starts_with("HTTP/1.1 403 Forbidden"), "{resp}");
+        assert!(res.is_none());
+
+        let (resp, res) = send_raw_loopback_request(
+            &format!("GET /callback?address={valid_addr}&email=a@b.com&session_ref=s1&state=wrong HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+            &state,
+        )?;
+        assert!(resp.starts_with("HTTP/1.1 403 Forbidden"), "{resp}");
+        assert!(res.is_none());
+
+        // Ancillary routes (even with query strings) -> 404 Not Found + Ok(None)
+        for path in ["/robots.txt", "/favicon.ico?v=1", "/apple-touch-icon.png"] {
+            let (resp, res) = send_raw_loopback_request(
+                &format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+                &state,
+            )?;
+            assert!(resp.starts_with("HTTP/1.1 404 Not Found"), "{path}: {resp}");
+            assert!(res.is_none());
+        }
+
+        // Non-GET method -> 405 Method Not Allowed + Ok(None)
+        let (resp, res) = send_raw_loopback_request(
+            &format!("POST /callback?address={valid_addr}&email=a@b.com&session_ref=s1&state={state} HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+            &state,
+        )?;
+        assert!(
+            resp.starts_with("HTTP/1.1 405 Method Not Allowed"),
+            "{resp}"
+        );
+        assert!(res.is_none());
+
+        // Missing/invalid callback params -> 400 Bad Request + Ok(None)
+        for bad_query in [
+            format!("email=a@b.com&session_ref=s1&state={state}"),
+            format!("address=0x123&email=a@b.com&session_ref=s1&state={state}"),
+            format!("address={valid_addr}&session_ref=s1&state={state}"),
+            format!("address={valid_addr}&email=a@b.com&state={state}"),
+        ] {
+            let (resp, res) = send_raw_loopback_request(
+                &format!("GET /callback?{bad_query} HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+                &state,
+            )?;
+            assert!(
+                resp.starts_with("HTTP/1.1 400 Bad Request"),
+                "{bad_query}: {resp}"
+            );
+            assert!(res.is_none());
+        }
+
+        // Valid callback with percent-encoded email -> 200 OK + decoded AuthResult
+        let (resp, res) = send_raw_loopback_request(
+            &format!("GET /callback?address={valid_addr}&email=alice%2Bcae%40example.com&session_ref=cdp_sess_ok&state={state} HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+            &state,
+        )?;
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+        let auth = res.ok_or_else(|| anyhow!("Expected valid AuthResult"))?;
+        assert_eq!(auth.email, "alice+cae@example.com");
+        assert_eq!(auth.evm_address, valid_addr);
+        assert_eq!(auth.session_ref, "cdp_sess_ok");
         Ok(())
     }
 }

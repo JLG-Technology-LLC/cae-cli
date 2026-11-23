@@ -144,7 +144,9 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sha3",
+ "subtle",
  "toml",
+ "url",
  "walkdir",
  "zeroize",
 ]
