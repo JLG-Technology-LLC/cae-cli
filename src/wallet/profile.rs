@@ -64,7 +64,7 @@ impl Network {
 
 /// On-disk candidate wallet record (`~/.cae/wallet.json`), conforming to
 /// `contracts/wallet-profile.schema.json`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateWalletProfile {
     pub wallet_type: WalletType,
@@ -75,12 +75,35 @@ pub struct CandidateWalletProfile {
     pub created_at: String,
     #[serde(default)]
     pub session_ref: Option<String>,
-    /// Hex-encoded 32-byte private key for `local-eoa` wallets (never printed by `show`).
+    /// Versioned AES-256-GCM envelope (`enc:v1:aes256gcm:...`) for `local-eoa` wallets.
     #[serde(default)]
     pub encrypted_privkey: Option<String>,
     pub daily_limit_usdc: f64,
     pub spent_today_usdc: f64,
     pub last_spend_date: String,
+}
+
+impl std::fmt::Debug for CandidateWalletProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CandidateWalletProfile")
+            .field("wallet_type", &self.wallet_type)
+            .field("evm_address", &self.evm_address)
+            .field("email", &self.email)
+            .field("network", &self.network)
+            .field("created_at", &self.created_at)
+            .field(
+                "session_ref",
+                &self.session_ref.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "encrypted_privkey",
+                &self.encrypted_privkey.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("daily_limit_usdc", &self.daily_limit_usdc)
+            .field("spent_today_usdc", &self.spent_today_usdc)
+            .field("last_spend_date", &self.last_spend_date)
+            .finish()
+    }
 }
 
 impl CandidateWalletProfile {
@@ -121,6 +144,56 @@ pub fn backup_path(path: &Path) -> PathBuf {
 pub fn backup_local_path(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or(Path::new(""));
     parent.join("wallet.local.bak")
+}
+
+pub fn wallet_key_path(wallet_file: &Path) -> PathBuf {
+    let parent = wallet_file.parent().unwrap_or(Path::new(""));
+    parent.join(".wallet.key")
+}
+
+fn parse_master_key_file(key_path: &Path) -> Result<Zeroizing<[u8; 32]>> {
+    let raw = Zeroizing::new(
+        fs::read_to_string(key_path)
+            .with_context(|| format!("Reading wallet wrapping key {}", key_path.display()))?,
+    );
+    let decoded = Zeroizing::new(
+        hex::decode(raw.trim())
+            .map_err(|_| anyhow!("Wallet wrapping key {} is malformed", key_path.display()))?,
+    );
+    if decoded.len() != 32 {
+        return Err(anyhow!(
+            "Wallet wrapping key {} has invalid length {}",
+            key_path.display(),
+            decoded.len()
+        ));
+    }
+    let mut key = Zeroizing::new([0u8; 32]);
+    key.copy_from_slice(decoded.as_slice());
+    Ok(key)
+}
+
+pub fn load_master_key(wallet_file: &Path) -> Result<Zeroizing<[u8; 32]>> {
+    let key_path = wallet_key_path(wallet_file);
+    if !key_path.exists() {
+        return Err(anyhow!(
+            "Wallet wrapping key {} not found; cannot decrypt stored private key",
+            key_path.display()
+        ));
+    }
+    parse_master_key_file(&key_path)
+}
+
+pub fn load_or_create_master_key(wallet_file: &Path) -> Result<Zeroizing<[u8; 32]>> {
+    let key_path = wallet_key_path(wallet_file);
+    if key_path.exists() {
+        return parse_master_key_file(&key_path);
+    }
+    let mut key = Zeroizing::new([0u8; 32]);
+    getrandom::getrandom(key.as_mut_slice())
+        .map_err(|e| anyhow!("Secure random number generator unavailable: {}", e))?;
+    let encoded = Zeroizing::new(hex::encode(key.as_slice()));
+    write_private_file(&key_path, encoded.as_bytes())?;
+    Ok(key)
 }
 
 pub fn load_profile(path: &Path) -> Result<Option<CandidateWalletProfile>> {
@@ -516,5 +589,19 @@ pub(crate) mod tests {
         without_secrets.encrypted_privkey = None;
         without_secrets.session_ref = None;
         drop(without_secrets);
+    }
+
+    #[test]
+    fn debug_redacts_secret_fields() {
+        let mut profile = sample();
+        let priv_secret = "secret_privkey_marker_12345".to_string();
+        let sess_secret = "cdp_sess_secret_marker_67890".to_string();
+        profile.encrypted_privkey = Some(priv_secret.clone());
+        profile.session_ref = Some(sess_secret.clone());
+
+        let formatted = format!("{:?}", profile);
+        assert!(formatted.contains("[REDACTED]"), "{formatted}");
+        assert!(!formatted.contains(&priv_secret), "{formatted}");
+        assert!(!formatted.contains(&sess_secret), "{formatted}");
     }
 }

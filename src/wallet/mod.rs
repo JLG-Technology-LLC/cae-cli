@@ -16,8 +16,9 @@ use std::path::Path;
 use zeroize::{Zeroize, Zeroizing};
 
 use profile::{
-    backup_local_path, backup_local_profile, backup_profile, load_profile, save_profile,
-    wallet_path, CandidateWalletProfile, Network, WalletType, DEFAULT_DAILY_LIMIT_USDC,
+    backup_local_path, backup_local_profile, backup_profile, load_master_key,
+    load_or_create_master_key, load_profile, save_profile, wallet_path, CandidateWalletProfile,
+    Network, WalletType, DEFAULT_DAILY_LIMIT_USDC,
 };
 
 /// Failures that map to the exit codes in `contracts/wallet-cli-contract.md`.
@@ -277,6 +278,25 @@ fn handle_init(args: InitArgs) -> Result<()> {
 
     if args.local {
         let key = crypto::generate_local_key()?;
+        let passphrase = std::env::var("CAE_WALLET_PASSPHRASE")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(Zeroizing::new);
+        let encrypted = match passphrase.as_deref() {
+            Some(pass) => crypto::encrypt_private_key_hex(
+                key.private_key_hex.as_str(),
+                &key.address,
+                crypto::WrappingKey::Passphrase(pass.as_str()),
+            )?,
+            None => {
+                let master = load_or_create_master_key(&path)?;
+                crypto::encrypt_private_key_hex(
+                    key.private_key_hex.as_str(),
+                    &key.address,
+                    crypto::WrappingKey::MasterKey(&master),
+                )?
+            }
+        };
         let profile = CandidateWalletProfile {
             wallet_type: WalletType::LocalEoa,
             evm_address: key.address,
@@ -284,12 +304,13 @@ fn handle_init(args: InitArgs) -> Result<()> {
             network: args.network,
             created_at: Utc::now().to_rfc3339(),
             session_ref: None,
-            encrypted_privkey: Some(key.private_key_hex.as_str().to_owned()),
+            encrypted_privkey: Some(encrypted),
             daily_limit_usdc: DEFAULT_DAILY_LIMIT_USDC,
             spent_today_usdc: 0.0,
             last_spend_date: limit::today(),
         };
         drop(key.private_key_hex);
+        drop(passphrase);
         save_profile(&path, &profile)?;
 
         if args.json {
@@ -641,11 +662,38 @@ fn handle_export_key(force: bool, json_output: bool) -> Result<()> {
              and cannot be exported."
         );
     }
-    let key = profile
+    let stored = profile
         .encrypted_privkey
         .as_deref()
         .context("Wallet file has no private key to export")?;
-    if !crypto::address_from_private_key_hex(key)?.eq_ignore_ascii_case(&profile.evm_address) {
+    let decrypted = if crypto::is_encrypted_privkey(stored) {
+        crypto::decrypt_private_key_hex_with(stored, &profile.evm_address, |kdf| match kdf {
+            "pbkdf2" => {
+                let pass = std::env::var("CAE_WALLET_PASSPHRASE")
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .map(Zeroizing::new)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Wallet private key is passphrase-encrypted; set CAE_WALLET_PASSPHRASE to decrypt it."
+                        )
+                    })?;
+                Ok(crypto::KeyMaterial::Passphrase(pass))
+            }
+            "hkdf" => Ok(crypto::KeyMaterial::MasterKey(load_master_key(&path)?)),
+            other => bail!("Unsupported encrypted private key KDF '{}'", other),
+        })?
+    } else {
+        eprintln!(
+            "{} Legacy unencrypted private key detected in {}. Re-initialize with `cae wallet init --local --force` after backing up to encrypt it at rest.",
+            "WARNING:".yellow().bold(),
+            path.display()
+        );
+        Zeroizing::new(stored.to_string())
+    };
+    if !crypto::address_from_private_key_hex(decrypted.as_str())?
+        .eq_ignore_ascii_case(&profile.evm_address)
+    {
         bail!("Stored private key does not match the wallet address; refusing to export.");
     }
 
@@ -659,7 +707,7 @@ fn handle_export_key(force: bool, json_output: bool) -> Result<()> {
         }
     }
 
-    let hex_key = Zeroizing::new(format!("0x{}", key.trim_start_matches("0x")));
+    let hex_key = Zeroizing::new(format!("0x{}", decrypted.trim_start_matches("0x")));
     if json_output {
         #[derive(serde::Serialize)]
         struct ExportKeyPayload<'a> {

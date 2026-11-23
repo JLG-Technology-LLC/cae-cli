@@ -83,6 +83,10 @@ fn init_local_then_address_and_show() -> TestResult {
     let privkey = stored["encrypted_privkey"]
         .as_str()
         .ok_or("missing privkey")?;
+    assert!(
+        privkey.starts_with("enc:v1:aes256gcm:hkdf:"),
+        "expected encrypted envelope, got {privkey}"
+    );
     assert!(!human.contains(privkey));
     assert!(!stdout(&init).contains(privkey));
     Ok(())
@@ -274,17 +278,74 @@ fn export_key_requires_confirmation_or_force() -> TestResult {
     assert_eq!(key.trim().len(), 66);
     assert!(key.starts_with("0x"));
 
-    // The exported key must correspond to the stored address.
+    // On disk the private key must be stored as an AES-256-GCM envelope, never plaintext hex.
     let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(sb.wallet_file())?)?;
-    assert_eq!(
-        format!(
-            "0x{}",
-            stored["encrypted_privkey"]
-                .as_str()
-                .ok_or("missing privkey")?
-        ),
-        key.trim()
+    let stored_ciphertext = stored["encrypted_privkey"]
+        .as_str()
+        .ok_or("missing privkey")?;
+    let raw_hex = key.trim().trim_start_matches("0x");
+    assert!(
+        stored_ciphertext.starts_with("enc:v1:aes256gcm:"),
+        "expected encrypted envelope, got {stored_ciphertext}"
     );
+    assert!(
+        !stored_ciphertext.contains(raw_hex),
+        "wallet.json must not contain plaintext private key"
+    );
+
+    // Backup files must likewise never contain the plaintext private key.
+    assert!(sb.cae(&["init", "--local", "--force"]).status.success());
+    let bak_content = fs::read_to_string(sb.home.join("wallet.json.bak"))?;
+    assert!(
+        !bak_content.contains(raw_hex),
+        "wallet.json.bak must not contain plaintext private key"
+    );
+    Ok(())
+}
+
+#[test]
+fn passphrase_encrypted_local_wallet_roundtrip_and_wrong_passphrase_fails() -> TestResult {
+    let sb = Sandbox::new("passphrase_wallet");
+    let init = Command::new(env!("CARGO_BIN_EXE_cae"))
+        .args(["wallet", "init", "--local", "--json"])
+        .env("CAE_HOME", &sb.home)
+        .env("CAE_WALLET_PASSPHRASE", "super-secret-passphrase")
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    assert!(init.status.success(), "{}", stderr(&init));
+
+    let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(sb.wallet_file())?)?;
+    let stored_ciphertext = stored["encrypted_privkey"]
+        .as_str()
+        .ok_or("missing encrypted_privkey")?;
+    assert!(
+        stored_ciphertext.starts_with("enc:v1:aes256gcm:pbkdf2:"),
+        "{stored_ciphertext}"
+    );
+    assert!(!sb.home.join(".wallet.key").exists());
+
+    let missing_pass = sb.cae(&["export-key", "--force"]);
+    assert!(!missing_pass.status.success());
+    assert!(stderr(&missing_pass).contains("CAE_WALLET_PASSPHRASE"));
+
+    let wrong_pass = Command::new(env!("CARGO_BIN_EXE_cae"))
+        .args(["wallet", "export-key", "--force"])
+        .env("CAE_HOME", &sb.home)
+        .env("CAE_WALLET_PASSPHRASE", "wrong-passphrase")
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    assert!(!wrong_pass.status.success());
+
+    let right_pass = Command::new(env!("CARGO_BIN_EXE_cae"))
+        .args(["wallet", "export-key", "--force"])
+        .env("CAE_HOME", &sb.home)
+        .env("CAE_WALLET_PASSPHRASE", "super-secret-passphrase")
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    assert!(right_pass.status.success(), "{}", stderr(&right_pass));
+    let exported = stdout(&right_pass);
+    assert_eq!(exported.trim().len(), 66);
+    assert!(!stored_ciphertext.contains(exported.trim().trim_start_matches("0x")));
     Ok(())
 }
 

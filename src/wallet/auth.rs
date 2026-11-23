@@ -6,11 +6,21 @@ use std::net::{TcpListener, TcpStream};
 use std::process::Command;
 use std::time::Duration;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct AuthResult {
     pub evm_address: String,
     pub email: String,
     pub session_ref: String,
+}
+
+impl std::fmt::Debug for AuthResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthResult")
+            .field("evm_address", &self.evm_address)
+            .field("email", &self.email)
+            .field("session_ref", &"[REDACTED]")
+            .finish()
+    }
 }
 
 pub fn default_port() -> u16 {
