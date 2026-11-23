@@ -3,8 +3,8 @@
 - **Slug**: pr-4-faucet-response-error-handling
 - **Fixed**: 2026-11-22
 - **Assessment**: ./assessment.md
-- **Status**: Fixed (Awaiting Verification)
-- **Commit SHA**: pending
+- **Status**: Verified
+- **Commit SHA**: `5316edd`
 - **GitHub Issue**: #17
 
 ## Summary
