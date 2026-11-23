@@ -344,12 +344,29 @@ cae wallet balance --json
 **Sample JSON Output:**
 ```json
 {
-  "address": "0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db",
+  "wallet_address": "0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db",
   "network": "base-sepolia",
-  "eth_balance": "0.015000000000000000",
-  "usdc_balance": "1.500000",
+  "eth_balance": 0.015,
+  "usdc_balance": 1.5,
   "tailoring_runs_available": 50,
-  "cost_per_run_usdc": "0.030000"
+  "cost_per_run_usdc": 0.03,
+  "balances": {
+    "eth": {
+      "raw": "15000000000000000",
+      "formatted": "0.0150 ETH"
+    },
+    "usdc": {
+      "raw": "1500000",
+      "formatted": "1.50 USDC"
+    }
+  },
+  "tailoring": {
+    "cost_per_run_usdc": 0.03,
+    "available_runs": 50,
+    "daily_limit_usdc": 0.15,
+    "spent_today_usdc": 0.03,
+    "daily_remaining_usdc": 0.12
+  }
 }
 ```
 
@@ -444,31 +461,62 @@ cae wallet export-key --force
     "current_branch": "dev",
     "head_commit": "8997091339fc558c33c4dab746ac71146e74a6c5",
     "head_short_commit": "8997091",
+    "head_commit_message": "feat(wallet): add candidate balance query",
+    "head_author": "Developer <dev@example.com>",
+    "head_date": "2026-11-12T22:25:00+00:00",
+    "remote_origin_url": "https://github.com/JLG-Technology-LLC/AICareerAssetEngine.git",
     "is_dirty": false,
     "modified_count": 0,
     "untracked_count": 0,
-    "staged_count": 0
+    "staged_count": 0,
+    "status_summary": []
   },
   "manifests": [
     {
       "ecosystem": "Flutter/Dart",
-      "path": "pubspec.yaml",
+      "file_name": "pubspec.yaml",
+      "relative_path": "pubspec.yaml",
       "name": "career_asset_engine",
       "version": "1.0.0-beta.5+6",
-      "description": "Your Job Seeker Assistant."
+      "description": "Your Job Seeker Assistant.",
+      "dependencies_count": 2,
+      "dependencies": [
+        {
+          "name": "flutter",
+          "version": "sdk: flutter",
+          "is_dev": false
+        },
+        {
+          "name": "flutter_test",
+          "version": "sdk: flutter",
+          "is_dev": true
+        }
+      ],
+      "metadata": {
+        "environment": {
+          "sdk": ">=3.5.0 <4.0.0"
+        },
+        "flutter_configured": true
+      }
     }
   ],
   "context_files": [
     {
-      "category": "Architecture",
-      "path": "ARCHITECTURE.md",
+      "context_type": "Architecture",
+      "relative_path": "ARCHITECTURE.md",
+      "file_size_bytes": 18450,
       "line_count": 420,
-      "byte_size": 18450,
-      "sha256": "4b20993bc481177ec7e8f571cecae8a9e22c02db...",
-      "headings": ["# Architecture Overview", "## System Topology"]
+      "word_count": 2650,
+      "sha256": "4b20993bc481177ec7e8f571cecae8a9e22c02db9f7d6e2c4a1b8e3d5f0a1234",
+      "last_modified": "2026-11-12T22:15:00+00:00",
+      "headings": ["Architecture Overview", "System Topology"],
+      "summary": "High-level system architecture for Career Asset Engine across desktop, mobile, and backend services.",
+      "preview": "# Architecture Overview\n\nHigh-level system architecture for Career Asset Engine across desktop, mobile, and backend services."
     }
   ],
-  "commits": []
+  "commits": [],
+  "tags": ["ai", "flutter"],
+  "notes": null
 }
 ```
 
@@ -610,7 +658,9 @@ docker run --rm \
 **A:** You are on Base Mainnet (`base`). Faucet funding is only supported on test networks (`base-sepolia`). Switch networks using `cae wallet set-network base-sepolia`.
 
 ### Q: How do I run tests headlessly in CI without browser prompts?
-**A:** Set the environment variable `CAE_SKIP_BROWSER_OPEN=1`. This instructs `cae` to fall back to headless terminal flows.
+**A:** Different mechanisms control the headless terminal flow vs. suppressing browser launches during loopback auth tests:
+* **Headless terminal flow (`--no-browser` / non-TTY / SSH):** Pass `--no-browser` to `cae wallet init` or `cae wallet login` to select the in-terminal email OTP flow. `cae` also automatically selects this headless terminal flow whenever `stdin` is not a TTY or `SSH_CONNECTION` is set (unless `CAE_FORCE_BROWSER=1` is set). For completely offline CI or local development workflows with no browser or OTP prompt, use `cae wallet init --local`.
+* **Suppressing OS browser launch in loopback tests (`CAE_SKIP_BROWSER_OPEN=1`):** Setting `CAE_SKIP_BROWSER_OPEN=1` does **not** switch to the terminal OTP flow; instead, it suppresses launching the OS browser window (`open` / `xdg-open` / `start`) while keeping the local loopback HTTP callback listener active. Automated loopback auth tests pair `CAE_SKIP_BROWSER_OPEN=1` with `CAE_FORCE_BROWSER=1` so the loopback server runs headlessly without opening a browser tab.
 
 ### Q: How do I back up or restore my wallet?
 **A:** Your active wallet profile lives at `~/.cae/wallet.json` (or `$CAE_HOME/wallet.json`). Automatic single-file backups are created with `0600` permissions on Unix in two cases:
