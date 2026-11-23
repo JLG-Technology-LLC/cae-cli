@@ -660,6 +660,153 @@ fn faucet_success_on_base_sepolia() -> TestResult {
     Ok(())
 }
 
+fn spawn_mock_faucet_response(
+    status_line: &'static str,
+    content_type: &'static str,
+    payload: &'static str,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock faucet response");
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 2048];
+            loop {
+                let n = stream.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(idx) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let header_text = String::from_utf8_lossy(&buf[..idx]);
+                    let content_len = header_text
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= idx + 4 + content_len {
+                        break;
+                    }
+                }
+            }
+
+            let response = format!(
+                "HTTP/1.1 {status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len(),
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    url
+}
+
+fn run_fund_with_faucet_url(sb: &Sandbox, url: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_cae"))
+        .args(["wallet", "fund", "--json"])
+        .env("CAE_HOME", &sb.home)
+        .env("CAE_CDP_FAUCET_URL", url)
+        .env("NO_PROXY", "*")
+        .env("no_proxy", "*")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run cae fund")
+}
+
+#[test]
+fn faucet_200_with_null_error_and_informational_message_succeeds() -> TestResult {
+    let sb = Sandbox::new("faucet_200_null_err");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+
+    let url = spawn_mock_faucet_response(
+        "200 OK",
+        "application/json",
+        r#"{"transactionHash":"0xdeadbeef1234567890abcdef1234567890abcdef","error":null,"message":"queued"}"#,
+    );
+
+    let out = run_fund_with_faucet_url(&sb, &url);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("faucet json");
+    assert_eq!(
+        json["transaction_hash"],
+        "0xdeadbeef1234567890abcdef1234567890abcdef"
+    );
+    Ok(())
+}
+
+#[test]
+fn faucet_400_and_500_structured_error_reports_http_status_and_message() -> TestResult {
+    let sb = Sandbox::new("faucet_http_structured_err");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+
+    let url_400 = spawn_mock_faucet_response(
+        "400 Bad Request",
+        "application/json",
+        r#"{"error":{"code":"invalid_address","message":"Address not allowed"}}"#,
+    );
+    let out_400 = run_fund_with_faucet_url(&sb, &url_400);
+    assert!(!out_400.status.success());
+    let err_400 = stderr(&out_400);
+    assert!(err_400.contains("400"), "{err_400}");
+    assert!(err_400.contains("Address not allowed"), "{err_400}");
+    assert!(!err_400.contains("Unknown faucet error"), "{err_400}");
+
+    let url_500 = spawn_mock_faucet_response(
+        "500 Internal Server Error",
+        "application/json",
+        r#"{"error":{"code":"internal_error","message":"Upstream signer unavailable"}}"#,
+    );
+    let out_500 = run_fund_with_faucet_url(&sb, &url_500);
+    assert!(!out_500.status.success());
+    let err_500 = stderr(&out_500);
+    assert!(err_500.contains("500"), "{err_500}");
+    assert!(err_500.contains("Upstream signer unavailable"), "{err_500}");
+    assert!(!err_500.contains("Unknown faucet error"), "{err_500}");
+    Ok(())
+}
+
+#[test]
+fn faucet_502_non_json_body_reports_http_status_and_snippet() -> TestResult {
+    let sb = Sandbox::new("faucet_502_html");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+
+    let url = spawn_mock_faucet_response(
+        "502 Bad Gateway",
+        "text/html",
+        "<html><body><h1>502 Bad Gateway</h1></body></html>",
+    );
+    let out = run_fund_with_faucet_url(&sb, &url);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("502"), "{err}");
+    assert!(err.contains("502 Bad Gateway"), "{err}");
+    assert!(!err.contains("non-JSON response"), "{err}");
+    Ok(())
+}
+
+#[test]
+fn faucet_429_preserves_rate_limit_message() -> TestResult {
+    let sb = Sandbox::new("faucet_429");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+
+    let url = spawn_mock_faucet_response(
+        "429 Too Many Requests",
+        "application/json",
+        r#"{"error":{"code":"rate_limit","message":"Too many requests"}}"#,
+    );
+    let out = run_fund_with_faucet_url(&sb, &url);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("rate limit exceeded"), "{err}");
+    assert!(err.contains("faucet.circle.com"), "{err}");
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // CDP User Auth & Login (US4)
 // ---------------------------------------------------------------------------
