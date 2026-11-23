@@ -3,8 +3,8 @@
 - **Slug**: pr-4-sync-labels-pep668-pip-fallback
 - **Fixed**: 2026-11-22
 - **Assessment**: ./assessment.md
-- **Status**: Fixed (Awaiting Verification)
-- **Commit SHA**: pending
+- **Status**: Verified
+- **Commit SHA**: `6d5da5c`
 - **GitHub Issue**: #19
 
 ## Summary
