@@ -1,7 +1,7 @@
 # Bug Fix: pr-4-mock-faucet-partial-tcp-read
-- **Status:** Fixed (Awaiting Verification)
+- **Status:** Verified
 - **Based On:** `.specify/bugs/pr-4-mock-faucet-partial-tcp-read/assessment.md`
-- **Commit SHA:** `pending`
+- **Commit SHA:** `9f7d18b`
 - **GitHub Issue:** `#21`
 
 ## Summary of Changes
