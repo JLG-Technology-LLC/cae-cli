@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Explicit release version (e.g., 0.2.0). Leave empty for automatic patch increment."
+        description: "Explicit release version (e.g., 0.2.0). Leave empty for automatic SemVer bump from Conventional Commits."
         required: false
         type: string
 
@@ -14,34 +14,121 @@ permissions:
 
 jobs:
   prepare-release:
-    name: Bump Cargo.toml Version, Tag & Open Release PR
-    runs-on: ubuntu-latest
+    name: Derive SemVer, Update Cargo.toml & Open Release PR
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: dev
           fetch-depth: 0
 
-      - name: Calculate Next Version & Update Cargo.toml
+      - name: Derive Next SemVer, Generate Notes & Update Cargo.toml
         id: bump
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          CURRENT_SEMVER=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml', 'rb'))['package']['version'])")
-          if [ -n "$INPUT_VERSION" ]; then
-            NEXT_SEMVER="$INPUT_VERSION"
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            COMMIT_RANGE="origin/dev"
           else
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_SEMVER"
-            NEXT_SEMVER="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            COMMIT_RANGE="${LAST_TAG}..origin/dev"
           fi
 
-          sed -i "0,/^version = \".*\"/s//version = \"${NEXT_SEMVER}\"/" Cargo.toml
+          git log "$COMMIT_RANGE" --no-merges --format="%s%x1f%b%x1e" > "$RUNNER_TEMP/commits.txt"
+
+          NEXT_SEMVER=$(python3 - "$INPUT_VERSION" "$RUNNER_TEMP/commits.txt" "$RUNNER_TEMP/release_notes.md" <<'PYEOF'
+          import re
+          import sys
+          import tomllib
+
+          input_version, commits_path, notes_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+          with open("Cargo.toml", "rb") as f:
+              current_semver = tomllib.load(f)["package"]["version"]
+
+          raw_commits = open(commits_path, encoding="utf-8", errors="replace").read()
+          entries = [e.strip() for e in raw_commits.split("\x1e") if e.strip()]
+
+          breaking, features, fixes, other = [], [], [], []
+          bump = "patch"
+
+          breaking_re = re.compile(r"^[a-z]+(\([^)]+\))?!:")
+          feat_re = re.compile(r"^feat(\([^)]+\))?:")
+          fix_re = re.compile(r"^fix(\([^)]+\))?:")
+
+          for entry in entries:
+              parts = entry.split("\x1f", 1)
+              subject = parts[0].strip()
+              body = parts[1].strip() if len(parts) > 1 else ""
+              is_breaking = bool(breaking_re.match(subject)) or ("BREAKING CHANGE:" in body) or ("BREAKING-CHANGE:" in body)
+
+              if is_breaking:
+                  bump = "major"
+                  breaking.append(subject)
+              elif feat_re.match(subject):
+                  if bump != "major":
+                      bump = "minor"
+                  features.append(subject)
+              elif fix_re.match(subject):
+                  fixes.append(subject)
+              else:
+                  other.append(subject)
+
+          input_version = input_version.strip().lstrip("v")
+          if input_version:
+              if not re.match(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$", input_version):
+                  print(f"::error::Invalid explicit version '{input_version}'", file=sys.stderr)
+                  sys.exit(1)
+              next_semver = input_version
+          else:
+              core = current_semver.split("-", 1)[0].split("+", 1)[0]
+              major, minor, patch = (int(x) for x in core.split(".")[:3])
+              if bump == "major":
+                  next_semver = f"{major + 1}.0.0"
+              elif bump == "minor":
+                  next_semver = f"{major}.{minor + 1}.0"
+              else:
+                  next_semver = f"{major}.{minor}.{patch + 1}"
+
+          lines = [f"## Release v{next_semver}", ""]
+          for title, items in [
+              ("Breaking Changes", breaking),
+              ("Features", features),
+              ("Bug Fixes", fixes),
+              ("Other", other),
+          ]:
+              if items:
+                  lines.append(f"### {title}")
+                  for item in items:
+                      lines.append(f"- {item}")
+                  lines.append("")
+
+          with open(notes_path, "w", encoding="utf-8") as nf:
+              nf.write("\n".join(lines).strip() + "\n")
+
+          with open("Cargo.toml", "r", encoding="utf-8") as cf:
+              cargo_text = cf.read()
+          updated_cargo = re.sub(
+              r'^version = ".*"',
+              f'version = "{next_semver}"',
+              cargo_text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          with open("Cargo.toml", "w", encoding="utf-8") as cf:
+              cf.write(updated_cargo)
+
+          print(next_semver)
+          PYEOF
+          )
+
           cargo check
           echo "semver=${NEXT_SEMVER}" >> "$GITHUB_OUTPUT"
           echo "tag=v${NEXT_SEMVER}" >> "$GITHUB_OUTPUT"
 
-      - name: Create Release Branch, Tag & Pull Request
+      - name: Create Release Branch & Pull Request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.bump.outputs.tag }}
@@ -51,16 +138,16 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           BRANCH="release/${TAG}"
-          git checkout -b "$BRANCH"
-          git add Cargo.toml Cargo.lock
+          git checkout -b "$BRANCH" origin/dev
+          git add Cargo.toml
+          if [ -f Cargo.lock ]; then
+            git add Cargo.lock
+          fi
           git commit -m "chore(release): bump version to ${SEMVER}"
           git push origin "$BRANCH"
 
-          git tag -a "$TAG" -m "Release ${TAG}"
-          git push origin "$TAG"
-
           gh pr create \
             --title "chore(release): ${TAG}" \
-            --body "Deterministic release PR for **${TAG}** triggered via \`release-trigger.yml\`." \
+            --body-file "$RUNNER_TEMP/release_notes.md" \
             --base main \
             --head "$BRANCH"
