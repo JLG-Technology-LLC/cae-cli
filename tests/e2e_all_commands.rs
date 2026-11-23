@@ -285,6 +285,34 @@ fn spawn_mock_rpc(
     (url, rx)
 }
 
+fn read_http_request(stream: &mut TcpStream) -> String {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 2048];
+    loop {
+        let n = stream.read(&mut chunk).unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(idx) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let header_text = String::from_utf8_lossy(&buf[..idx]);
+            let content_len = header_text
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                })
+                .unwrap_or(0);
+            if buf.len() >= idx + 4 + content_len {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&buf).to_string()
+}
+
 fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock faucet");
     let url = format!("http://{}", listener.local_addr().expect("local addr"));
@@ -293,10 +321,8 @@ fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receive
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { break };
-            let mut buf = [0u8; 1024];
-            let n = stream.read(&mut buf).unwrap_or(0);
-            let body = String::from_utf8_lossy(&buf[..n]).to_string();
-            let _ = tx.send(body);
+            let request = read_http_request(&mut stream);
+            let _ = tx.send(request);
 
             let payload = format!(r#"{{"transaction_hash":"{tx_hash}","status":"confirmed"}}"#);
             let response = format!(
@@ -305,6 +331,7 @@ fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receive
                 payload
             );
             let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
         }
     });
     (url, rx)

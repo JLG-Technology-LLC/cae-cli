@@ -672,6 +672,34 @@ fn rpc_and_faucet_errors_redact_url_secrets() -> TestResult {
 // Faucet (US3): testnet funding & mainnet refusal
 // ---------------------------------------------------------------------------
 
+fn read_http_request(stream: &mut TcpStream) -> String {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 2048];
+    loop {
+        let n = stream.read(&mut chunk).unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(idx) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let header_text = String::from_utf8_lossy(&buf[..idx]);
+            let content_len = header_text
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                })
+                .unwrap_or(0);
+            if buf.len() >= idx + 4 + content_len {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&buf).to_string()
+}
+
 fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock faucet");
     let url = format!("http://{}", listener.local_addr().expect("local addr"));
@@ -680,12 +708,8 @@ fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receive
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { break };
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 1024];
-            let n = stream.read(&mut chunk).unwrap_or(0);
-            buf.extend_from_slice(&chunk[..n]);
-            let body = String::from_utf8_lossy(&buf).to_string();
-            let _ = tx.send(body);
+            let request = read_http_request(&mut stream);
+            let _ = tx.send(request);
 
             let payload = format!(r#"{{"transaction_hash":"{tx_hash}","status":"confirmed"}}"#);
             let response = format!(
@@ -694,6 +718,7 @@ fn spawn_mock_faucet(tx_hash: &'static str) -> (String, std::sync::mpsc::Receive
                 payload
             );
             let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
         }
     });
     (url, rx)
@@ -769,29 +794,7 @@ fn spawn_mock_faucet_response(
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { break };
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 2048];
-            loop {
-                let n = stream.read(&mut chunk).unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&chunk[..n]);
-                if let Some(idx) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                    let header_text = String::from_utf8_lossy(&buf[..idx]);
-                    let content_len = header_text
-                        .lines()
-                        .find_map(|l| {
-                            l.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-                        })
-                        .unwrap_or(0);
-                    if buf.len() >= idx + 4 + content_len {
-                        break;
-                    }
-                }
-            }
+            let _ = read_http_request(&mut stream);
 
             let response = format!(
                 "HTTP/1.1 {status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
@@ -802,6 +805,34 @@ fn spawn_mock_faucet_response(
         }
     });
     url
+}
+
+#[test]
+fn mock_faucet_captures_split_tcp_post_body() -> TestResult {
+    let (url, calls) = spawn_mock_faucet("0xsplitbodyhash");
+    let addr = url.trim_start_matches("http://");
+    let body = r#"{"address":"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf","network":"base-sepolia","token":"usdc"}"#;
+    let headers = format!(
+        "POST / HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+
+    let mut stream = TcpStream::connect(addr)?;
+    stream.write_all(headers.as_bytes())?;
+    stream.flush()?;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    stream.write_all(body.as_bytes())?;
+    stream.flush()?;
+
+    let mut resp = String::new();
+    stream.read_to_string(&mut resp)?;
+    assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+    assert!(resp.contains("0xsplitbodyhash"), "{resp}");
+
+    let captured = calls.recv_timeout(std::time::Duration::from_secs(2))?;
+    assert!(captured.contains("0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"));
+    assert!(captured.contains("\"token\":\"usdc\""));
+    Ok(())
 }
 
 fn run_fund_with_faucet_url(sb: &Sandbox, url: &str) -> Output {
