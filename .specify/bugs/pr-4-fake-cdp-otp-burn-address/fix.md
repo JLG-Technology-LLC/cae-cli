@@ -1,7 +1,7 @@
 # Bug Fix: pr-4-fake-cdp-otp-burn-address
-- **Status:** Fixed (Awaiting Verification)
+- **Status:** Verified
 - **Based On:** `.specify/bugs/pr-4-fake-cdp-otp-burn-address/assessment.md`
-- **Commit SHA:** `pending`
+- **Commit SHA:** `d9af8fc`
 - **GitHub Issue:** `#7`
 
 ## Summary of Changes
