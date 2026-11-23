@@ -4,8 +4,8 @@
 - **Fixed**: 2026-11-22
 - **Assessment**: ./assessment.md
 - **GitHub Issue**: #22
-- **Status**: Fixed (Awaiting Verification)
-- **Commit SHA**: pending
+- **Status**: Verified
+- **Commit SHA**: `1c03c38`
 
 ## Summary
 
