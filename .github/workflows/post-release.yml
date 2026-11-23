@@ -1,0 +1,57 @@
+name: "Post-Release (Tag, GitHub Release & Back-Merge)"
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  post-release:
+    name: Tag Main, Create Public Release & Back-Merge to Dev
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.base_ref == 'main' &&
+      (startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'hotfix/'))
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Create Tag, Public GitHub Release & Back-Merge PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SEMVER=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml', 'rb'))['package']['version'])")
+          TAG="v${SEMVER}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git tag -a "$TAG" -m "Release ${TAG}"
+            git push origin "$TAG"
+          fi
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
+
+          EXISTING_PR=$(gh pr list --state open --base dev --head main --json number --jq 'length')
+          if [ "$EXISTING_PR" -eq 0 ]; then
+            gh pr create \
+              --base dev \
+              --head main \
+              --title "chore(release): back-merge ${TAG} into dev" \
+              --body "Automated back-merge of \`main\` into \`dev\` following release **${TAG}**."
+          else
+            echo "An open main -> dev back-merge PR already exists; skipping."
+          fi

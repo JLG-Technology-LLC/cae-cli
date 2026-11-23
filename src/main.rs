@@ -2,6 +2,7 @@ mod context;
 mod git;
 mod ledger;
 mod manifest;
+mod wallet;
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -14,7 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::context::extract_agent_context;
 use crate::git::{get_commit_record, inspect_git_status};
 use crate::ledger::{
-    delete_ledger, find_ledger, find_ledger_for_current_dir, list_all_ledgers,
+    delete_ledger, find_ledger, find_ledger_for_current_dir, get_ledger_dir, list_all_ledgers,
     sanitize_project_id, save_ledger, ProjectLedger,
 };
 use crate::manifest::detect_and_parse_manifests;
@@ -72,7 +73,14 @@ enum Commands {
         /// Output raw JSON format
         #[arg(long)]
         json: bool,
+
+        /// Print the directory where tracked project files are stored
+        #[arg(long)]
+        dir: bool,
     },
+
+    /// Print the directory where tracked project ledger files are stored
+    Dir,
 
     /// Record a git commit into the project ledger
     RecordCommit {
@@ -92,6 +100,12 @@ enum Commands {
         #[arg(short, long)]
         commit: Option<String>,
     },
+
+    /// Manage your candidate wallet (non-custodial EVM identity for tailoring payments)
+    Wallet {
+        #[command(subcommand)]
+        command: wallet::WalletCommand,
+    },
 }
 
 fn main() -> Result<()> {
@@ -108,7 +122,20 @@ fn main() -> Result<()> {
 
         Commands::Untrack { target } => handle_untrack(&target),
 
-        Commands::Status { target, all, json } => handle_status(target, all, json),
+        Commands::Status {
+            target,
+            all,
+            json,
+            dir,
+        } => {
+            if dir {
+                handle_dir()
+            } else {
+                handle_status(target, all, json)
+            }
+        }
+
+        Commands::Dir => handle_dir(),
 
         Commands::RecordCommit {
             project,
@@ -116,7 +143,21 @@ fn main() -> Result<()> {
             note,
             commit,
         } => handle_record_commit(project, message, note, commit),
+
+        Commands::Wallet { command } => {
+            if let Err(err) = wallet::run(command) {
+                eprintln!("Error: {:#}", err);
+                std::process::exit(wallet::exit_code(&err));
+            }
+            Ok(())
+        }
     }
+}
+
+fn handle_dir() -> Result<()> {
+    let dir = get_ledger_dir().with_context(|| "Failed to retrieve ledger directory")?;
+    println!("{}", dir.display());
+    Ok(())
 }
 
 // -----------------------------------------------------------------------------
@@ -137,7 +178,10 @@ fn handle_track(
         .with_context(|| format!("Resolving canonical path for {}", path.display()))?;
 
     if !canonical_path.is_dir() {
-        bail!("Target path '{}' is not a directory.", canonical_path.display());
+        bail!(
+            "Target path '{}' is not a directory.",
+            canonical_path.display()
+        );
     }
 
     println!(
@@ -189,10 +233,7 @@ fn handle_track(
     };
 
     // Collect ecosystems
-    let mut ecosystems: Vec<String> = manifests
-        .iter()
-        .map(|m| m.ecosystem.clone())
-        .collect();
+    let mut ecosystems: Vec<String> = manifests.iter().map(|m| m.ecosystem.clone()).collect();
     ecosystems.sort();
     ecosystems.dedup();
 
@@ -208,7 +249,10 @@ fn handle_track(
         .unwrap_or_default();
 
     let combined_tags = if tags.is_empty() {
-        existing_ledger.as_ref().map(|e| e.tags.clone()).unwrap_or_default()
+        existing_ledger
+            .as_ref()
+            .map(|e| e.tags.clone())
+            .unwrap_or_default()
     } else {
         tags
     };
@@ -237,7 +281,11 @@ fn handle_track(
         project_id.cyan()
     );
     println!("  {:<16} {}", "Location:".dimmed(), ledger.canonical_path);
-    println!("  {:<16} {}", "Ledger File:".dimmed(), ledger_path.display());
+    println!(
+        "  {:<16} {}",
+        "Ledger File:".dimmed(),
+        ledger_path.display()
+    );
     println!(
         "  {:<16} {}",
         "Ecosystem(s):".dimmed(),
@@ -269,7 +317,15 @@ fn handle_track(
             let heading_preview = if c.headings.is_empty() {
                 String::new()
             } else {
-                format!(" - headings: [{}]", c.headings.iter().take(3).cloned().collect::<Vec<_>>().join(", "))
+                format!(
+                    " - headings: [{}]",
+                    c.headings
+                        .iter()
+                        .take(3)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             };
             println!(
                 "  • {:<14} {} ({} lines, {} bytes){}",
@@ -287,10 +343,22 @@ fn handle_track(
         println!("\n{}", "Git Repository:".bold());
         println!(
             "  • Branch: {} | HEAD: {} | Status: {}",
-            git_status.current_branch.as_deref().unwrap_or("detached").cyan(),
-            git_status.head_short_commit.as_deref().unwrap_or("unknown").yellow(),
+            git_status
+                .current_branch
+                .as_deref()
+                .unwrap_or("detached")
+                .cyan(),
+            git_status
+                .head_short_commit
+                .as_deref()
+                .unwrap_or("unknown")
+                .yellow(),
             if git_status.is_dirty {
-                format!("Dirty ({} modified, {} untracked, {} staged)", git_status.modified_count, git_status.untracked_count, git_status.staged_count).red()
+                format!(
+                    "Dirty ({} modified, {} untracked, {} staged)",
+                    git_status.modified_count, git_status.untracked_count, git_status.staged_count
+                )
+                .red()
             } else {
                 "Clean".green()
             }
@@ -298,11 +366,17 @@ fn handle_track(
 
         match install_post_commit_hook(&canonical_path) {
             Ok(Some(hook_path)) => {
-                println!("  • Git Hook: Installed at {}", hook_path.display().to_string().cyan());
+                println!(
+                    "  • Git Hook: Installed at {}",
+                    hook_path.display().to_string().cyan()
+                );
             }
             Ok(None) => {}
             Err(e) => {
-                eprintln!("  • Git Hook: Warning: could not install post-commit hook: {}", e);
+                eprintln!(
+                    "  • Git Hook: Warning: could not install post-commit hook: {}",
+                    e
+                );
             }
         }
     } else {
@@ -391,7 +465,10 @@ fn handle_untrack(target: &str) -> Result<()> {
                 ledger.name.bold(),
                 ledger.id.cyan()
             );
-            println!("  Deleted ledger file: {}", path.display().to_string().dimmed());
+            println!(
+                "  Deleted ledger file: {}",
+                path.display().to_string().dimmed()
+            );
         }
         None => {
             println!("Project '{}' was not found in ledger.", ledger.id);
@@ -453,13 +530,18 @@ fn print_all_projects_status(json_output: bool) -> Result<()> {
 
     if projects.is_empty() {
         println!("{}", "No projects are currently tracked in CAE.".yellow());
-        println!("Run '{}' to track your first project.", "cae track <path>".cyan());
+        println!(
+            "Run '{}' to track your first project.",
+            "cae track <path>".cyan()
+        );
         return Ok(());
     }
 
     println!(
         "{}",
-        format!("Tracked Projects ({})", projects.len()).bold().cyan()
+        format!("Tracked Projects ({})", projects.len())
+            .bold()
+            .cyan()
     );
     println!("{:-<95}", "");
     println!(
@@ -509,13 +591,19 @@ fn print_all_projects_status(json_output: bool) -> Result<()> {
 }
 
 fn print_detailed_project_status(ledger: &ProjectLedger) {
-    println!("{}", "==================================================================".dimmed());
+    println!(
+        "{}",
+        "==================================================================".dimmed()
+    );
     println!(
         "Project: {} ({})",
         ledger.name.bold().green(),
         ledger.id.cyan()
     );
-    println!("{}", "==================================================================".dimmed());
+    println!(
+        "{}",
+        "==================================================================".dimmed()
+    );
     println!("  Path:        {}", ledger.canonical_path.yellow());
     println!("  Tracked At:  {}", ledger.tracked_at.dimmed());
     println!("  Updated At:  {}", ledger.updated_at.dimmed());
@@ -553,11 +641,19 @@ fn print_detailed_project_status(ledger: &ProjectLedger) {
     if live_git.is_git_repo {
         println!(
             "  Branch:      {}",
-            live_git.current_branch.as_deref().unwrap_or("detached").cyan()
+            live_git
+                .current_branch
+                .as_deref()
+                .unwrap_or("detached")
+                .cyan()
         );
         println!(
             "  HEAD Commit: {} ({})",
-            live_git.head_short_commit.as_deref().unwrap_or("n/a").yellow(),
+            live_git
+                .head_short_commit
+                .as_deref()
+                .unwrap_or("n/a")
+                .yellow(),
             live_git.head_commit.as_deref().unwrap_or("n/a").dimmed()
         );
         if let Some(author) = &live_git.head_author {
@@ -584,10 +680,7 @@ fn print_detailed_project_status(ledger: &ProjectLedger) {
                 println!("    {}", s.dimmed());
             }
             if live_git.status_summary.len() > 5 {
-                println!(
-                    "    ... and {} more",
-                    live_git.status_summary.len() - 5
-                );
+                println!("    ... and {} more", live_git.status_summary.len() - 5);
             }
         } else {
             println!("  Working Tree: {}", "CLEAN".green());
@@ -597,7 +690,10 @@ fn print_detailed_project_status(ledger: &ProjectLedger) {
     }
 
     // Manifests
-    println!("\n{}", format!("Manifests ({}):", ledger.manifests.len()).bold());
+    println!(
+        "\n{}",
+        format!("Manifests ({}):", ledger.manifests.len()).bold()
+    );
     if ledger.manifests.is_empty() {
         println!("  None found.");
     } else {
@@ -612,10 +708,7 @@ fn print_detailed_project_status(ledger: &ProjectLedger) {
                 let first_line = desc.lines().next().unwrap_or("");
                 println!("    Description: {}", truncate_str(first_line, 70).dimmed());
             }
-            println!(
-                "    Dependencies ({} total):",
-                m.dependencies_count
-            );
+            println!("    Dependencies ({} total):", m.dependencies_count);
             let sample_deps: Vec<String> = m
                 .dependencies
                 .iter()
@@ -683,7 +776,13 @@ fn print_detailed_project_status(ledger: &ProjectLedger) {
                 println!(
                     "    Changed files ({}): {}",
                     c.changed_files.len(),
-                    c.changed_files.iter().take(4).cloned().collect::<Vec<_>>().join(", ").dimmed()
+                    c.changed_files
+                        .iter()
+                        .take(4)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                        .dimmed()
                 );
             }
         }
@@ -770,7 +869,11 @@ fn handle_record_commit(
         "\n{} Successfully recorded commit in ledger:",
         "✔".green().bold()
     );
-    println!("  Commit:       {} ({})", commit_record.short_hash.yellow(), commit_record.hash.dimmed());
+    println!(
+        "  Commit:       {} ({})",
+        commit_record.short_hash.yellow(),
+        commit_record.hash.dimmed()
+    );
     println!("  Branch:       {}", commit_record.branch.cyan());
     println!("  Author:       {}", commit_record.author);
     println!("  Date:         {}", commit_record.date.dimmed());

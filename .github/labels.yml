@@ -1,0 +1,39 @@
+- name: bug
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: enhancement
+  color: "a2eeef"
+  description: "New feature or request"
+
+- name: documentation
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+
+- name: needs-triage
+  color: "fbca04"
+  description: "Needs initial triage and assessment"
+
+- name: verified
+  color: "0e8a16"
+  description: "Bug fix verified via tests"
+
+- name: release
+  color: "1d76db"
+  description: "Release preparation or tracking"
+
+- name: "severity:critical"
+  color: "b60205"
+  description: "Critical severity issue"
+
+- name: "severity:high"
+  color: "d93f0b"
+  description: "High severity issue"
+
+- name: "severity:medium"
+  color: "fbca04"
+  description: "Medium severity issue"
+
+- name: "severity:low"
+  color: "0e8a16"
+  description: "Low severity issue"

@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "extensions": {
+    "assess": {
+      "version": "1.0.1",
+      "source": "local",
+      "manifest_hash": "sha256:a1c87d9ce8088e7865f1d352137777a693b0595ccc310957c7c051a604ca1db2",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.assess.intake",
+          "speckit.assess.research",
+          "speckit.assess.define",
+          "speckit.assess.shape",
+          "speckit.assess.decide"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-11-09T07:10:58.005208+00:00"
+    },
+    "bug": {
+      "version": "1.0.1",
+      "source": "local",
+      "manifest_hash": "sha256:0f8ca9b828f8855be72a17cdef1f355fba81d7173b16f349d500d2ab367384fb",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.bug.assess",
+          "speckit.bug.fix",
+          "speckit.bug.test"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-11-09T07:10:58.647566+00:00"
+    },
+    "git": {
+      "version": "1.0.8",
+      "source": "local",
+      "manifest_hash": "sha256:53692513178b01b0cca2d9328158fe08668b8dfa307e5e43bf86ca46ce69f19a",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-11-21T05:40:09.949570+00:00"
+    },
+    "github": {
+      "version": "1.0.6",
+      "source": "local",
+      "manifest_hash": "sha256:e77193414ff8bf39b6338df4c8f4c205e3ff108a58a181727161e3e88009bff7",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.github.taskstoissues"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-11-21T05:40:11.028003+00:00"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+services:
+  e2e:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+      args:
+        RUST_VERSION: "1-slim-trixie"
+    image: cae-cli:test-trixie
+    volumes:
+      - .:/workspace:ro
+      - cae_target_cache:/target
+      - cae_cargo_cache:/usr/local/cargo/registry
+    environment:
+      - CAE_SKIP_BROWSER_OPEN=1
+      - CARGO_TARGET_DIR=/target
+    command: cargo test --test e2e_all_commands --all-features -- --nocapture
+
+volumes:
+  cae_target_cache:
+  cae_cargo_cache:

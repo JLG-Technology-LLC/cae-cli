@@ -1,0 +1,60 @@
+name: Bug Report
+description: Report a bug in cae-cli project tracking, manifest parsing, git inspection, or ledger I/O
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Maintainers triage reports and can run the **Spec Kit `bugfix` workflow** (`/speckit-bug-assess` → human review gate → `/speckit-bug-fix` → `/speckit-bug-test`).
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed Behavior
+      description: What happened? Include CLI stderr output, exit code, or malformed JSON output.
+      placeholder: "Running `cae track .` on a workspace with a virtual workspace Cargo.toml fails with..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should `cae` have output or recorded in the ledger?
+      placeholder: "Should parse workspace members and exit with code 0."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal commands or sample manifest/directory layout to reproduce.
+      placeholder: |
+        1. Create a directory with `Cargo.toml` containing...
+        2. Run `cae track <dir>`
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Module
+      options:
+        - "CLI Subcommands (`src/main.rs`)"
+        - "Manifest Parsers (`src/manifest.rs`)"
+        - "Context Extractor (`src/context.rs`)"
+        - "Git Inspection (`src/git.rs`)"
+        - "Ledger Storage (`src/ledger.rs`)"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Rust Toolchain & Commit SHA
+      description: Output of `rustc --version` and `git rev-parse --short HEAD`
+      placeholder: "e.g., rustc 1.82.0 / commit a1b2c3d"
+    validations:
+      required: false

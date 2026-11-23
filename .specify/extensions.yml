@@ -1,0 +1,238 @@
+installed:
+- assess
+- bug
+- git
+- github
+settings:
+  auto_execute_hooks: true
+hooks:
+  before_constitution:
+  - extension: git
+    command: speckit.git.initialize
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Execute speckit.git.initialize?
+    description: Initialize Git repository before constitution setup
+    condition: null
+  before_specify:
+  - extension: git
+    command: speckit.git.feature
+    enabled: false
+    optional: false
+    priority: 10
+    prompt: Execute speckit.git.feature?
+    description: Create feature branch before specification (replaced by gitflow)
+    condition: null
+  - extension: gitflow
+    command: speckit.gitflow.feature-start
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Start Git Flow feature branch from dev?
+    description: Create Git Flow feature branch from dev before specification
+    condition: null
+  before_clarify:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit outstanding changes before clarification?
+    description: Auto-commit before spec clarification
+    condition: null
+  before_plan:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit outstanding changes before planning?
+    description: Auto-commit before implementation planning
+    condition: null
+  before_tasks:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit outstanding changes before task generation?
+    description: Auto-commit before task generation
+    condition: null
+  before_implement:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit outstanding changes before implementation?
+    description: Auto-commit before implementation
+    condition: null
+  before_checklist:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit outstanding changes before checklist?
+    description: Auto-commit before checklist generation
+    condition: null
+  before_analyze:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit outstanding changes before analysis?
+    description: Auto-commit before analysis
+    condition: null
+  before_taskstoissues:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit outstanding changes before issue sync?
+    description: Auto-commit before tasks-to-issues conversion
+    condition: null
+  after_constitution:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit constitution changes?
+    description: Auto-commit after constitution update
+    condition: null
+  after_specify:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit specification changes?
+    description: Auto-commit after specification
+    condition: null
+  - extension: github
+    command: speckit.github.featureissue
+    enabled: true
+    optional: false
+    priority: 20
+    prompt: Create GitHub feature issue from specification?
+    description: Create or link GitHub feature issue after specification
+    condition: null
+  after_clarify:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit clarification changes?
+    description: Auto-commit after spec clarification
+    condition: null
+  after_plan:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit plan changes?
+    description: Auto-commit after implementation planning
+    condition: null
+  after_tasks:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit task changes?
+    description: Auto-commit after task generation
+    condition: null
+  after_implement:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit implementation changes?
+    description: Auto-commit after implementation
+    condition: null
+  - extension: gitflow
+    command: speckit.gitflow.feature-finish
+    enabled: true
+    optional: true
+    priority: 20
+    prompt: Finish Git Flow feature branch into dev (or open PR to dev)?
+    description: Finish Git Flow feature branch after implementation
+    condition: null
+  after_checklist:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit checklist changes?
+    description: Auto-commit after checklist generation
+    condition: null
+  after_analyze:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit analysis results?
+    description: Auto-commit after analysis
+    condition: null
+  after_taskstoissues:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit after syncing issues?
+    description: Auto-commit after tasks-to-issues conversion
+    condition: null
+  before_bug_fix:
+  - extension: gitflow
+    command: speckit.gitflow.bugfix-start
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Start Git Flow bugfix branch from dev?
+    description: Create Git Flow bugfix branch from dev before bug remediation
+    condition: null
+  after_bug_test:
+  - extension: github
+    command: speckit.github.bugverify
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Post bug verification outcome to linked GitHub issue?
+    description: Post test.md verification summary to GitHub bug issue and update labels
+    condition: null
+  - extension: gitflow
+    command: speckit.gitflow.bugfix-finish
+    enabled: true
+    optional: true
+    priority: 20
+    prompt: Finish verified Git Flow bugfix branch into dev (or open PR)?
+    description: Finish Git Flow bugfix branch after bug verification passes
+    condition: null
+  after_bug_assess:
+  - extension: github
+    command: speckit.github.bugissue
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Create GitHub bug issue for validated bug assessment?
+    description: Create GitHub bug issue after bug assessment when verdict is valid
+    condition: null
+  after_assess_decide:
+  - extension: github
+    command: speckit.github.featureissue
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Create GitHub feature issue for approved (go) idea assessment?
+    description: Create GitHub feature issue after idea assessment returns a go verdict
+    condition: null
