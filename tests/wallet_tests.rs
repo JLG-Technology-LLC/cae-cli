@@ -1001,46 +1001,112 @@ fn faucet_429_preserves_rate_limit_message() -> TestResult {
 // CDP User Auth & Login (US4)
 // ---------------------------------------------------------------------------
 
+fn extract_loopback_url_from_stderr(
+    stderr: std::process::ChildStderr,
+) -> (
+    std::sync::mpsc::Receiver<String>,
+    std::thread::JoinHandle<String>,
+) {
+    use std::io::BufRead;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stderr);
+        let mut all_stderr = String::new();
+        let mut sent = false;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if !sent {
+                if let Some(pos) = line.find("http://localhost:") {
+                    let candidate = line[pos..]
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .trim_end_matches(|c: char| {
+                            !c.is_ascii_alphanumeric()
+                                && c != '/'
+                                && c != ':'
+                                && c != '?'
+                                && c != '='
+                                && c != '&'
+                                && c != '-'
+                                && c != '_'
+                        })
+                        .to_string();
+                    if !candidate.is_empty() {
+                        let _ = tx.send(candidate);
+                        sent = true;
+                    }
+                }
+            }
+            all_stderr.push_str(&line);
+            line.clear();
+        }
+        all_stderr
+    });
+    (rx, handle)
+}
+
+fn parse_loopback_port(url: &str) -> Result<u16, Box<dyn std::error::Error>> {
+    let parsed = url
+        .strip_prefix("http://localhost:")
+        .ok_or("missing http://localhost: prefix")?;
+    let port_str = parsed.split(['/', '?']).next().unwrap_or("");
+    Ok(port_str.parse::<u16>()?)
+}
+
+fn send_loopback_callback(port: u16, path_and_query: String) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", port))
+            .unwrap_or_else(|e| panic!("connect to loopback port {port} failed: {e}"));
+        let req = format!("GET {path_and_query} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        stream
+            .write_all(req.as_bytes())
+            .expect("write loopback callback");
+        stream.flush().expect("flush loopback callback");
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .expect("read loopback HTTP response");
+        response
+    })
+}
+
 #[test]
 fn cdp_init_loopback_captures_auth_and_persists_embedded_profile() -> TestResult {
     let sb = Sandbox::new("cdp_init");
 
-    // Pick an ephemeral port for test loopback
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-
-    // Spawn client callback thread to hit loopback
-    std::thread::spawn(move || {
-        // Wait briefly for cae to bind
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let mut attempts = 0;
-        let mut stream = loop {
-            if let Ok(s) = TcpStream::connect(format!("127.0.0.1:{}", port)) {
-                break s;
-            }
-            attempts += 1;
-            if attempts >= 100 {
-                panic!("Timeout waiting to connect to 127.0.0.1:{}", port);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        };
-        let req =
-            "GET /callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=candidate@example.com&session_ref=cdp_sess_token123 HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        let _ = stream.write_all(req.as_bytes());
-    });
-
-    let out = Command::new(env!("CARGO_BIN_EXE_cae"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cae"))
         .args(["wallet", "init", "--json"])
         .env("CAE_HOME", &sb.home)
-        .env("CAE_AUTH_PORT", port.to_string())
+        .env("CAE_AUTH_PORT", "0")
         .env("CAE_FORCE_BROWSER", "1")
         .env("CAE_SKIP_BROWSER_OPEN", "1")
         .stdin(std::process::Stdio::null())
-        .output()
-        .expect("run cae init");
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
 
-    assert!(out.status.success(), "{}", stderr(&out));
+    let (url_rx, stderr_handle) =
+        extract_loopback_url_from_stderr(child.stderr.take().ok_or("missing stderr")?);
+    let url = url_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .map_err(|_| "timeout waiting for loopback URL on stderr")?;
+    let port = parse_loopback_port(&url)?;
+
+    let callback_handle = send_loopback_callback(
+        port,
+        "/callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=candidate@example.com&session_ref=cdp_sess_token123".to_string(),
+    );
+    let http_response = callback_handle.join().expect("callback thread panicked");
+    assert!(
+        http_response.starts_with("HTTP/1.1 200 OK"),
+        "{http_response}"
+    );
+
+    let out = child.wait_with_output()?;
+    let child_stderr = stderr_handle.join().expect("stderr reader thread panicked");
+
+    assert!(out.status.success(), "{child_stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("init json");
     assert_eq!(json["wallet_type"], "cdp-embedded");
     assert_eq!(
@@ -1063,39 +1129,38 @@ fn cdp_login_backs_up_active_local_wallet() -> TestResult {
     assert!(sb.cae(&["init", "--local"]).status.success());
     let local_addr = stdout(&sb.cae(&["address"])).trim().to_string();
 
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let mut attempts = 0;
-        let mut stream = loop {
-            if let Ok(s) = TcpStream::connect(format!("127.0.0.1:{}", port)) {
-                break s;
-            }
-            attempts += 1;
-            if attempts >= 100 {
-                panic!("Timeout waiting to connect to 127.0.0.1:{}", port);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        };
-        let req =
-            "GET /callback?address=0x1111111111111111111111111111111111111111&email=new@example.com&session_ref=cdp_sess_new HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        let _ = stream.write_all(req.as_bytes());
-    });
-
-    let out = Command::new(env!("CARGO_BIN_EXE_cae"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cae"))
         .args(["wallet", "login", "--json"])
         .env("CAE_HOME", &sb.home)
-        .env("CAE_AUTH_PORT", port.to_string())
+        .env("CAE_AUTH_PORT", "0")
         .env("CAE_FORCE_BROWSER", "1")
         .env("CAE_SKIP_BROWSER_OPEN", "1")
         .stdin(std::process::Stdio::null())
-        .output()
-        .expect("run cae login");
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
 
-    assert!(out.status.success(), "{}", stderr(&out));
+    let (url_rx, stderr_handle) =
+        extract_loopback_url_from_stderr(child.stderr.take().ok_or("missing stderr")?);
+    let url = url_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .map_err(|_| "timeout waiting for loopback URL on stderr")?;
+    let port = parse_loopback_port(&url)?;
+
+    let callback_handle = send_loopback_callback(
+        port,
+        "/callback?address=0x1111111111111111111111111111111111111111&email=new@example.com&session_ref=cdp_sess_new".to_string(),
+    );
+    let http_response = callback_handle.join().expect("callback thread panicked");
+    assert!(
+        http_response.starts_with("HTTP/1.1 200 OK"),
+        "{http_response}"
+    );
+
+    let out = child.wait_with_output()?;
+    let child_stderr = stderr_handle.join().expect("stderr reader thread panicked");
+
+    assert!(out.status.success(), "{child_stderr}");
 
     // Verify local backup file exists and has previous local address
     let bak_path = sb.home.join("wallet.local.bak");

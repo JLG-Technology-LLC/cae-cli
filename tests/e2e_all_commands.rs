@@ -729,33 +729,86 @@ fn test_ci_cd_all_commands_and_subcommands_end_to_end() -> Result<(), Box<dyn st
     assert!(stderr(&enclave_guard).contains("enclave"));
 
     // B. Loopback redirect flow with login
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let mut attempts = 0;
-        let mut stream = loop {
-            if let Ok(s) = TcpStream::connect(format!("127.0.0.1:{}", port)) {
-                break s;
-            }
-            attempts += 1;
-            if attempts >= 100 {
-                panic!("Timeout waiting to connect to 127.0.0.1:{}", port);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        };
-        let req = "GET /callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=synced@example.com&session_ref=cdp_sess_verified HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        let _ = stream.write_all(req.as_bytes());
-    });
-
     println!("\n$ cae wallet login --json (loopback auth)");
     let mut login_cmd = h.cmd(&["wallet", "login", "--json"]);
     login_cmd
-        .env("CAE_AUTH_PORT", port.to_string())
-        .env("CAE_FORCE_BROWSER", "1");
-    let login_out = login_cmd.output()?;
+        .env("CAE_AUTH_PORT", "0")
+        .env("CAE_FORCE_BROWSER", "1")
+        .env("CAE_SKIP_BROWSER_OPEN", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut login_child = login_cmd.spawn()?;
+
+    let login_stderr = login_child.stderr.take().ok_or("missing login stderr")?;
+    let (url_tx, url_rx) = std::sync::mpsc::channel();
+    let stderr_handle = std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut reader = std::io::BufReader::new(login_stderr);
+        let mut collected = String::new();
+        let mut sent = false;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if !sent {
+                if let Some(pos) = line.find("http://localhost:") {
+                    let candidate = line[pos..]
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .trim_end_matches(|c: char| {
+                            !c.is_ascii_alphanumeric()
+                                && c != '/'
+                                && c != ':'
+                                && c != '?'
+                                && c != '='
+                                && c != '&'
+                                && c != '-'
+                                && c != '_'
+                        })
+                        .to_string();
+                    if !candidate.is_empty() {
+                        let _ = url_tx.send(candidate);
+                        sent = true;
+                    }
+                }
+            }
+            collected.push_str(&line);
+            line.clear();
+        }
+        collected
+    });
+
+    let auth_url = url_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .map_err(|_| "timeout waiting for login loopback URL on stderr")?;
+    let port_str = auth_url
+        .strip_prefix("http://localhost:")
+        .ok_or("missing http://localhost: prefix")?
+        .split(['/', '?'])
+        .next()
+        .unwrap_or("");
+    let port: u16 = port_str.parse()?;
+
+    let callback_handle = std::thread::spawn(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", port))
+            .unwrap_or_else(|e| panic!("connect to loopback port {port} failed: {e}"));
+        let req = "GET /callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=synced@example.com&session_ref=cdp_sess_verified HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        stream.write_all(req.as_bytes()).expect("write callback");
+        stream.flush().expect("flush callback");
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .expect("read loopback HTTP response");
+        response
+    });
+
+    let callback_resp = callback_handle.join().expect("callback thread panicked");
+    assert!(
+        callback_resp.starts_with("HTTP/1.1 200 OK"),
+        "{callback_resp}"
+    );
+    let mut login_out = login_child.wait_with_output()?;
+    let captured_stderr = stderr_handle.join().expect("stderr reader thread panicked");
+    login_out.stderr = captured_stderr.into_bytes();
     h.print_output(&login_out);
     assert_success(&login_out, "cae wallet login (loopback)");
     let login_val: serde_json::Value = serde_json::from_str(&stdout(&login_out))?;

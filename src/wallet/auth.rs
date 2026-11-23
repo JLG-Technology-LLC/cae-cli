@@ -77,18 +77,23 @@ pub fn run_loopback_auth(port: u16, email_hint: Option<String>) -> Result<AuthRe
             port
         )
     })?;
+    let bound_port = listener
+        .local_addr()
+        .context("Reading bound loopback port")?
+        .port();
 
     // Set accept timeout to 2 minutes with non-blocking polling
     listener
         .set_nonblocking(true)
         .context("Setting listener non-blocking mode")?;
 
-    let url = format!("http://localhost:{}/", port);
+    let url = format!("http://localhost:{}/", bound_port);
     eprintln!(
         "{} Opening authentication flow in your browser at: {}",
         "→".cyan().bold(),
         url.yellow()
     );
+    let _ = std::io::stderr().flush();
 
     // Try opening browser
     let _ = open_browser(&url);
@@ -377,5 +382,38 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("Secure random number generator unavailable"));
         assert!(msg.contains("simulated rng failure"));
+    }
+
+    #[test]
+    fn loopback_listener_supports_ephemeral_port_zero() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let bound_port = listener.local_addr()?.port();
+        assert_ne!(bound_port, 0);
+
+        let handle = std::thread::spawn(move || -> Result<AuthResult> {
+            let (mut stream, _) = listener.accept()?;
+            handle_loopback_stream(&mut stream, None)?
+                .ok_or_else(|| anyhow!("Expected callback auth result"))
+        });
+
+        let mut stream = TcpStream::connect(("127.0.0.1", bound_port))?;
+        let req = "GET /callback?address=0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c&email=ephemeral@example.com&session_ref=cdp_sess_ephemeral HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        stream.write_all(req.as_bytes())?;
+        stream.flush()?;
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response)?;
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+
+        let auth = handle
+            .join()
+            .map_err(|_| anyhow!("loopback test thread panicked"))??;
+        assert_eq!(
+            auth.evm_address,
+            "0x53d2B9745A17a8c43B06C1e9C3848Ea13F89a27c"
+        );
+        assert_eq!(auth.email, "ephemeral@example.com");
+        assert_eq!(auth.session_ref, "cdp_sess_ephemeral");
+        Ok(())
     }
 }
