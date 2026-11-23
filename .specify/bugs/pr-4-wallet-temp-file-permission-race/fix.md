@@ -3,8 +3,8 @@
 - **Slug**: pr-4-wallet-temp-file-permission-race
 - **Fixed**: 2026-11-22
 - **Assessment**: ./assessment.md
-- **Status**: Fixed (Awaiting Verification)
-- **Commit SHA**: pending
+- **Status**: Verified
+- **Commit SHA**: `3ff6e51`
 - **GitHub Issue**: #11
 
 ## Summary
