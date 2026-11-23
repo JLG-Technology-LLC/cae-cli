@@ -149,52 +149,108 @@ pub fn backup_local_profile(path: &Path) -> Result<PathBuf> {
     Ok(dest)
 }
 
-fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+const MAX_TEMP_ATTEMPTS: usize = 8;
+
+pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("Wallet path {} has no parent directory", path.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("Creating wallet directory {}", parent.display()))?;
+    create_private_dir(parent)?;
 
-    let mut tmp_name = path.as_os_str().to_owned();
-    tmp_name.push(format!(".tmp{}", std::process::id()));
-    let tmp_path = PathBuf::from(tmp_name);
-
-    let result = (|| -> Result<()> {
-        let mut file = open_private(&tmp_path)?;
-        file.write_all(contents)?;
-        file.sync_all()?;
-        fs::rename(&tmp_path, path)
-            .with_context(|| format!("Replacing wallet file {}", path.display()))?;
-        Ok(())
-    })();
-
+    let (tmp_path, file) = create_private_temp(path)?;
+    let result = write_and_replace(&tmp_path, path, file, contents);
     if result.is_err() {
         let _ = fs::remove_file(&tmp_path);
     }
     result
 }
 
+fn write_and_replace(
+    tmp_path: &Path,
+    dest_path: &Path,
+    mut file: fs::File,
+    contents: &[u8],
+) -> Result<()> {
+    file.write_all(contents)
+        .with_context(|| format!("Writing temporary wallet file {}", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("Syncing temporary wallet file {}", tmp_path.display()))?;
+    drop(file);
+    fs::rename(tmp_path, dest_path)
+        .with_context(|| format!("Replacing wallet file {}", dest_path.display()))?;
+    Ok(())
+}
+
+fn create_private_temp(path: &Path) -> Result<(PathBuf, fs::File)> {
+    for _ in 0..MAX_TEMP_ATTEMPTS {
+        let mut random_bytes = [0u8; 16];
+        getrandom::getrandom(&mut random_bytes)
+            .map_err(|e| anyhow!("Secure random number generator unavailable: {}", e))?;
+        let mut tmp_name = path.as_os_str().to_owned();
+        tmp_name.push(".tmp.");
+        tmp_name.push(hex::encode(random_bytes));
+        let tmp_path = PathBuf::from(tmp_name);
+
+        match open_private(&tmp_path) {
+            Ok(file) => return Ok((tmp_path, file)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(anyhow::Error::new(err)
+                    .context(format!("Creating {}", tmp_path.display())));
+            }
+        }
+    }
+    Err(anyhow!(
+        "Failed to allocate a unique temporary file for {} after {} attempts",
+        path.display(),
+        MAX_TEMP_ATTEMPTS
+    ))
+}
+
 #[cfg(unix)]
-fn open_private(path: &Path) -> Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .with_context(|| format!("Creating {}", path.display()))
+fn create_private_dir(parent: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(parent)
+        .with_context(|| format!("Creating wallet directory {}", parent.display()))
 }
 
 #[cfg(not(unix))]
-fn open_private(path: &Path) -> Result<fs::File> {
+fn create_private_dir(parent: &Path) -> Result<()> {
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    fs::create_dir_all(parent)
+        .with_context(|| format!("Creating wallet directory {}", parent.display()))
+}
+
+#[cfg(unix)]
+fn open_private(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    if let Err(err) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(err);
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_private(path: &Path) -> std::io::Result<fs::File> {
     fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .open(path)
-        .with_context(|| format!("Creating {}", path.display()))
 }
 
 #[cfg(test)]
@@ -269,5 +325,147 @@ pub(crate) mod tests {
             json["surprise"] = serde_json::json!(true);
             assert!(serde_json::from_value::<CandidateWalletProfile>(json).is_err());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creates_parent_directory_owner_only() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("parent_dir_perms")?;
+        let nested = dir.join("nested");
+        let deep = nested.join("deep");
+        let path = deep.join("wallet.json");
+
+        save_profile(&path, &sample())?;
+        assert_eq!(fs::metadata(&nested)?.permissions().mode() & 0o777, 0o700);
+        assert_eq!(fs::metadata(&deep)?.permissions().mode() & 0o777, 0o700);
+        assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignores_preexisting_predictable_tmp_and_keeps_0600() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("preexisting_tmp")?;
+        let path = dir.join("wallet.json");
+
+        let mut legacy_name = path.as_os_str().to_owned();
+        legacy_name.push(format!(".tmp{}", std::process::id()));
+        let legacy_tmp = PathBuf::from(legacy_name);
+        fs::write(&legacy_tmp, b"preexisting")?;
+        fs::set_permissions(&legacy_tmp, fs::Permissions::from_mode(0o644))?;
+
+        let profile = sample();
+        save_profile(&path, &profile)?;
+
+        assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        assert_eq!(load_profile(&path)?, Some(profile));
+        assert_eq!(fs::read(&legacy_tmp)?, b"preexisting");
+        assert_eq!(
+            fs::metadata(&legacy_tmp)?.permissions().mode() & 0o777,
+            0o644
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_preexisting_symlink_at_temp_path() -> Result<()> {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = temp_dir("symlink_refusal")?;
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, b"untouched")?;
+
+        // Direct open_private must refuse a symlink to an existing file without touching target.
+        let symlink_tmp = dir.join("wallet.json.tmp.existing");
+        symlink(&victim, &symlink_tmp)?;
+        let err = open_private(&symlink_tmp)
+            .err()
+            .ok_or_else(|| anyhow!("open_private must reject a pre-existing symlink"))?;
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&victim)?, b"untouched");
+
+        // Direct open_private must also refuse a dangling symlink without creating its target.
+        let dangling_target = dir.join("dangling_victim.txt");
+        let dangling_link = dir.join("wallet.json.tmp.dangling");
+        symlink(&dangling_target, &dangling_link)?;
+        let err = open_private(&dangling_link)
+            .err()
+            .ok_or_else(|| anyhow!("open_private must reject a dangling symlink"))?;
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(!dangling_target.exists());
+
+        // Direct open_private must also refuse a pre-existing permissive regular file.
+        let existing_file = dir.join("wallet.json.tmp.regular");
+        fs::write(&existing_file, b"keep")?;
+        fs::set_permissions(&existing_file, fs::Permissions::from_mode(0o644))?;
+        let err = open_private(&existing_file)
+            .err()
+            .ok_or_else(|| anyhow!("open_private must reject an existing file"))?;
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&existing_file)?, b"keep");
+
+        // End-to-end save_profile with a symlink planted at the legacy <path>.tmp<pid> location.
+        let path = dir.join("wallet.json");
+        let mut legacy_name = path.as_os_str().to_owned();
+        legacy_name.push(format!(".tmp{}", std::process::id()));
+        let legacy_symlink = PathBuf::from(legacy_name);
+        symlink(&victim, &legacy_symlink)?;
+
+        save_profile(&path, &sample())?;
+        assert_eq!(fs::read(&victim)?, b"untouched");
+        assert!(!fs::symlink_metadata(&path)?.file_type().is_symlink());
+        assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_saves_do_not_collide() -> Result<()> {
+        let dir = temp_dir("concurrent")?;
+        let path = dir.join("wallet.json");
+
+        let mut handles = Vec::new();
+        for worker in 0..8u32 {
+            let target = path.clone();
+            handles.push(std::thread::spawn(move || -> Result<()> {
+                let mut profile = sample();
+                profile.spent_today_usdc = f64::from(worker) * 0.01;
+                for _ in 0..10 {
+                    save_profile(&target, &profile)?;
+                }
+                Ok(())
+            }));
+        }
+
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| anyhow!("concurrent save worker thread panicked"))??;
+        }
+
+        let loaded = load_profile(&path)?;
+        assert!(loaded.is_some());
+
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(&dir)? {
+            entries.push(entry?.file_name().to_string_lossy().into_owned());
+        }
+        assert_eq!(entries, ["wallet.json"]);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
     }
 }
