@@ -276,22 +276,24 @@ Initializes a candidate wallet. By default, launches Coinbase Developer Platform
 cae wallet init [OPTIONS]
 ```
 
-* `--local`: Generate an offline, device-local non-custodial EOA wallet (secp256k1) stored with 0600 permissions in `~/.cae/wallet.json`.
+* `--local`: Generate an offline, device-local non-custodial EOA wallet (secp256k1). Stores private key material on disk in `~/.cae/wallet.json` (`0600` permissions on Unix). Intended for local/testnet development or offline workflows — prefer CDP User Auth for Base Mainnet funds.
 * `--network <NETWORK>`: Target default network (`base-sepolia` [default] or `base`).
 * `--no-browser`: Use terminal email OTP prompt instead of launching a local web browser.
-* `--force`: Overwrite existing wallet (backs up current wallet to `~/.cae/wallet.json.bak`).
+* `--force`: Overwrite an existing wallet, backing up the current file to `~/.cae/wallet.json.bak` (overwriting any previous `.bak` file). Export or archive any funded wallet before re-running with `--force`.
 * `--json`: Emit JSON-formatted creation receipt.
 
 ```bash
-# Recommended: Local development wallet on Base Sepolia
-cae wallet init --local
+# Recommended for production Base Mainnet (CDP User Auth — keys managed in Coinbase's secure enclave)
+cae wallet init --network base
 
-# Production mainnet wallet with force overwrite
-cae wallet init --local --network base --force
-
-# CDP User Auth via terminal OTP
+# CDP User Auth via terminal OTP (headless / SSH environments)
 cae wallet init --no-browser
+
+# Local/testnet development or offline workflow (Base Sepolia default; stores key material on disk)
+cae wallet init --local
 ```
+
+> **Security Note:** Avoid using `--local` for production Base Mainnet funds because private key material is stored on local disk (`~/.cae/wallet.json`); use CDP User Auth (`cae wallet init --network base`) instead. Only pass `--force` when you intentionally want to replace your current wallet — it overwrites `~/.cae/wallet.json` and replaces any previous `~/.cae/wallet.json.bak` backup, so back up or export any funded key first (`cae wallet export-key`).
 
 #### `cae wallet login` & `logout`
 
@@ -472,19 +474,30 @@ cae wallet export-key --force
 
 ### 2. Candidate Wallet Profile (`~/.cae/wallet.json`)
 
-Stored strictly with POSIX permissions `0600` (`-rw-------`):
+On Unix systems, `~/.cae` (or `$CAE_HOME`) is created with `0700` permissions and `~/.cae/wallet.json` (along with its `.bak` backup files) is atomically written with POSIX `0600` (`-rw-------`) owner-only permissions:
 
 ```json
 {
   "wallet_type": "local-eoa",
   "evm_address": "0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db",
+  "email": null,
   "network": "base-sepolia",
   "created_at": "2026-11-12T21:00:00.000000+00:00",
+  "session_ref": null,
+  "encrypted_privkey": "<redacted-local-eoa-key-material>",
   "daily_limit_usdc": 0.15,
   "spent_today_usdc": 0.03,
   "last_spend_date": "2026-11-12"
 }
 ```
+
+* **`email`** / **`session_ref`**: Populated for `cdp-embedded` wallets (`null` for `local-eoa`); `session_ref` holds the active CDP session reference and is cleared by `cae wallet logout`.
+* **`encrypted_privkey`**: Populated for `local-eoa` wallets (`null` for `cdp-embedded`); stores sensitive private key material on disk (never printed by `cae wallet show`).
+
+> **Security Warning:** Treat `~/.cae/wallet.json`, `~/.cae/wallet.json.bak`, and `~/.cae/wallet.local.bak` as sensitive secrets — they contain `encrypted_privkey` (for `local-eoa` wallets) or `session_ref` (for `cdp-embedded` wallets).
+> * Never commit these files to Git, share them, or sync `~/.cae/` to cloud storage.
+> * POSIX `0600` permissions are enforced automatically on Unix (`macOS` / `Linux`). On non-Unix platforms (such as Windows), POSIX mode bits do not apply; protect the directory with OS-level user ACLs and full-disk encryption.
+> * Prefer CDP User Auth (`cae wallet init --network base`) rather than `--local` when holding production Base Mainnet funds.
 
 ---
 
@@ -600,7 +613,19 @@ docker run --rm \
 **A:** Set the environment variable `CAE_SKIP_BROWSER_OPEN=1`. This instructs `cae` to fall back to headless terminal flows.
 
 ### Q: How do I back up or restore my wallet?
-**A:** Your wallet profile lives at `~/.cae/wallet.json`. When `cae wallet init --force` runs, an automatic backup is created at `~/.cae/wallet.json.bak`. You can restore your profile by copying `wallet.json.bak` back to `wallet.json`.
+**A:** Your active wallet profile lives at `~/.cae/wallet.json` (or `$CAE_HOME/wallet.json`). Automatic single-file backups are created with `0600` permissions on Unix in two cases:
+* `~/.cae/wallet.json.bak` — written when replacing an existing wallet with `cae wallet init --force`.
+* `~/.cae/wallet.local.bak` — written when `cae wallet login` replaces an active `local-eoa` wallet with a CDP account.
+
+Because each backup uses a single fixed filename, repeated `cae wallet init --force` runs overwrite any previous `wallet.json.bak` (and another `login` over a local wallet overwrites `wallet.local.bak`). Always archive important wallets or export keys (`cae wallet export-key`) to a secure offline location before overwriting. To restore on Unix while preserving owner-only `0600` permissions:
+
+```bash
+install -m 600 ~/.cae/wallet.json.bak ~/.cae/wallet.json
+# Or, when restoring a local wallet backed up by `cae wallet login`:
+install -m 600 ~/.cae/wallet.local.bak ~/.cae/wallet.json
+```
+
+*(If you restore with `cp`, immediately run `chmod 600 ~/.cae/wallet.json`, and treat `.bak` files with the same secrecy as `wallet.json` because they contain the same `encrypted_privkey` / `session_ref` fields.)*
 
 ---
 
