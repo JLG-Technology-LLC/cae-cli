@@ -1,7 +1,7 @@
 # Bug Fix: pr-4-plaintext-privkey-storage-and-debug
-- **Status:** Fixed (Awaiting Verification)
+- **Status:** Verified
 - **Based On:** `.specify/bugs/pr-4-plaintext-privkey-storage-and-debug/assessment.md`
-- **Commit SHA:** `pending`
+- **Commit SHA:** `669ddd1`
 - **GitHub Issue:** `#8`
 
 ## Summary of Changes
