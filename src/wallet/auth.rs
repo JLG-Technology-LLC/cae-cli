@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use colored::*;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, IsTerminal, Read, Write};
@@ -183,11 +183,13 @@ fn handle_loopback_stream(
         .or(email_hint)
         .unwrap_or_else(|| "candidate@example.com".to_string());
 
-    let session_ref = query_params
+    let raw_session_ref = query_params
         .get("session_ref")
-        .or_else(|| query_params.get("token"))
-        .cloned()
-        .unwrap_or_else(|| format!("cdp_sess_{}", hex::encode(crypto_random_bytes())));
+        .or_else(|| query_params.get("token"));
+    let session_ref = match raw_session_ref {
+        Some(token) => token.clone(),
+        None => format!("cdp_sess_{}", hex::encode(crypto_random_bytes()?)),
+    };
 
     let raw_address = query_params
         .get("address")
@@ -277,7 +279,7 @@ pub fn run_terminal_otp(email_opt: Option<String>) -> Result<AuthResult> {
 
     eprintln!("{} Verifying code...", "✔".green());
 
-    let session_ref = format!("cdp_sess_{}", hex::encode(crypto_random_bytes()));
+    let session_ref = format!("cdp_sess_{}", hex::encode(crypto_random_bytes()?));
     let evm_address = derive_address_for_email(&email);
 
     Ok(AuthResult {
@@ -287,10 +289,18 @@ pub fn run_terminal_otp(email_opt: Option<String>) -> Result<AuthResult> {
     })
 }
 
-fn crypto_random_bytes() -> [u8; 16] {
+fn crypto_random_bytes() -> Result<[u8; 16]> {
+    crypto_random_bytes_with(getrandom::getrandom)
+}
+
+fn crypto_random_bytes_with<F, E>(fill: F) -> Result<[u8; 16]>
+where
+    F: FnOnce(&mut [u8]) -> std::result::Result<(), E>,
+    E: std::fmt::Display,
+{
     let mut b = [0u8; 16];
-    getrandom::getrandom(&mut b).unwrap_or_default();
-    b
+    fill(&mut b).map_err(|e| anyhow!("Secure random number generator unavailable: {}", e))?;
+    Ok(b)
 }
 
 fn derive_address_for_email(email: &str) -> String {
@@ -338,5 +348,24 @@ mod tests {
         assert!(!escaped.contains('>'));
         assert!(!escaped.contains('"'));
         assert!(!escaped.contains('\''));
+    }
+
+    #[test]
+    fn crypto_random_bytes_returns_non_zero_distinct_entropy() -> Result<()> {
+        let first = crypto_random_bytes()?;
+        let second = crypto_random_bytes()?;
+        assert_ne!(first, [0u8; 16]);
+        assert_ne!(second, [0u8; 16]);
+        assert_ne!(first, second);
+        Ok(())
+    }
+
+    #[test]
+    fn crypto_random_bytes_propagates_csprng_error() {
+        let err = crypto_random_bytes_with(|_| Err("simulated rng failure"))
+            .expect_err("CSPRNG failure must return Err instead of all-zero fallback");
+        let msg = err.to_string();
+        assert!(msg.contains("Secure random number generator unavailable"));
+        assert!(msg.contains("simulated rng failure"));
     }
 }
