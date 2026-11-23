@@ -63,13 +63,16 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           LABELS=()
-          if [[ "$HEAD_REF" == feature/* ]] || [[ "$PR_TITLE" =~ ^feat(\([^)]+\))?!?: ]]; then
+          FEAT_RE='^feat(\([^)]+\))?!?:'
+          FIX_RE='^fix(\([^)]+\))?!?:'
+          DOCS_RE='^docs(\([^)]+\))?!?:'
+          if [[ "$HEAD_REF" == feature/* ]] || [[ "$PR_TITLE" =~ $FEAT_RE ]]; then
             LABELS+=("enhancement")
           fi
-          if [[ "$HEAD_REF" == bugfix/* ]] || [[ "$HEAD_REF" == hotfix/* ]] || [[ "$PR_TITLE" =~ ^fix(\([^)]+\))?!?: ]]; then
+          if [[ "$HEAD_REF" == bugfix/* ]] || [[ "$HEAD_REF" == hotfix/* ]] || [[ "$PR_TITLE" =~ $FIX_RE ]]; then
             LABELS+=("bug")
           fi
-          if [[ "$PR_TITLE" =~ ^docs(\([^)]+\))?!?: ]]; then
+          if [[ "$PR_TITLE" =~ $DOCS_RE ]]; then
             LABELS+=("documentation")
           fi
           if [[ "$HEAD_REF" == release/* ]]; then
