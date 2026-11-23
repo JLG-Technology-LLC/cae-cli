@@ -128,6 +128,9 @@ pub struct LoginArgs {
     email: Option<String>,
     #[arg(long)]
     no_browser: bool,
+    /// Overwrite an active local-eoa wallet without prompting (kept as wallet.local.bak)
+    #[arg(long)]
+    pub force: bool,
     #[arg(long)]
     json: bool,
 }
@@ -253,27 +256,32 @@ fn show_json(profile: &CandidateWalletProfile, path: &Path) -> serde_json::Value
     })
 }
 
-// -----------------------------------------------------------------------------
-// init
-// -----------------------------------------------------------------------------
-fn handle_init(args: InitArgs) -> Result<()> {
-    let path = wallet_path()?;
-    if path.exists() {
-        if !args.force {
-            bail!(
-                "A wallet already exists at {}. Re-run with --force to replace it \
-                 (the current file will be kept as wallet.json.bak).",
-                path.display()
-            );
-        }
-        let bak = backup_profile(&path)?;
-        if !args.json {
+fn maybe_backup_existing_profile(path: &Path, had_existing: bool, json: bool) -> Result<()> {
+    if had_existing {
+        let bak = backup_profile(path)?;
+        if !json {
             eprintln!(
                 "{} Existing wallet backed up to {}",
                 "!".yellow().bold(),
                 bak.display()
             );
         }
+    }
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// init
+// -----------------------------------------------------------------------------
+fn handle_init(args: InitArgs) -> Result<()> {
+    let path = wallet_path()?;
+    let had_existing = path.exists();
+    if had_existing && !args.force {
+        bail!(
+            "A wallet already exists at {}. Re-run with --force to replace it \
+             (the current file will be kept as wallet.json.bak).",
+            path.display()
+        );
     }
 
     if args.local {
@@ -311,6 +319,7 @@ fn handle_init(args: InitArgs) -> Result<()> {
         };
         drop(key.private_key_hex);
         drop(passphrase);
+        maybe_backup_existing_profile(&path, had_existing, args.json)?;
         save_profile(&path, &profile)?;
 
         if args.json {
@@ -339,6 +348,7 @@ fn handle_init(args: InitArgs) -> Result<()> {
         spent_today_usdc: 0.0,
         last_spend_date: limit::today(),
     };
+    maybe_backup_existing_profile(&path, had_existing, args.json)?;
     save_profile(&path, &profile)?;
 
     if args.json {
@@ -360,22 +370,27 @@ fn handle_login(args: LoginArgs) -> Result<()> {
     let path = wallet_path()?;
     let existing = load_profile(&path)?;
 
+    let replacing_local = matches!(
+        existing.as_ref(),
+        Some(p) if p.wallet_type == WalletType::LocalEoa
+    );
     if let Some(ref prev) = existing {
-        if prev.wallet_type == WalletType::LocalEoa {
+        if prev.wallet_type == WalletType::LocalEoa && !args.force {
+            if args.json || !std::io::stdin().is_terminal() {
+                bail!(
+                    "Local wallet ({}) is active. Re-run with --force to back it up to {} and link a CDP cloud account.",
+                    prev.evm_address,
+                    backup_local_path(&path).display()
+                );
+            }
             let prompt = format!(
                 "Local wallet ({}) is active. Link CDP cloud account? Existing local key will be backed up to {}",
                 prev.evm_address,
                 backup_local_path(&path).display()
             );
-            if !args.json && !confirm(&prompt)? {
-                bail!("Login cancelled. Existing local wallet was kept.");
-            }
-            let local_bak = backup_local_profile(&path)?;
-            if !args.json {
-                eprintln!(
-                    "{} Local wallet backed up to {}",
-                    "!".yellow().bold(),
-                    local_bak.display()
+            if !confirm(&prompt)? {
+                bail!(
+                    "Login cancelled. Existing local wallet was kept (pass --force to overwrite non-interactively)."
                 );
             }
         }
@@ -410,6 +425,16 @@ fn handle_login(args: LoginArgs) -> Result<()> {
         spent_today_usdc: spent_today,
         last_spend_date: last_spend,
     };
+    if replacing_local {
+        let local_bak = backup_local_profile(&path)?;
+        if !args.json {
+            eprintln!(
+                "{} Local wallet backed up to {}",
+                "!".yellow().bold(),
+                local_bak.display()
+            );
+        }
+    }
     save_profile(&path, &profile)?;
 
     if args.json {

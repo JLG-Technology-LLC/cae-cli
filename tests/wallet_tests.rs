@@ -1160,7 +1160,7 @@ fn cdp_login_backs_up_active_local_wallet() -> TestResult {
     let local_addr = stdout(&sb.cae(&["address"])).trim().to_string();
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_cae"))
-        .args(["wallet", "login", "--json"])
+        .args(["wallet", "login", "--force", "--json"])
         .env("CAE_HOME", &sb.home)
         .env("CAE_AUTH_PORT", "0")
         .env("CAE_FORCE_BROWSER", "1")
@@ -1365,5 +1365,65 @@ fn cdp_init_terminal_otp_rejects_bad_otp_and_malformed_server_address() -> TestR
         !sb.wallet_file().exists(),
         "wallet.json must not be created"
     );
+    Ok(())
+}
+
+#[test]
+fn cdp_login_json_refuses_local_wallet_without_force() -> TestResult {
+    let sb = Sandbox::new("cdp_login_no_force");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+    let original_wallet = fs::read_to_string(sb.wallet_file())?;
+
+    let out = sb.cae(&["login", "--json"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("--force"), "{err}");
+    assert_eq!(fs::read_to_string(sb.wallet_file())?, original_wallet);
+    assert!(
+        !sb.home.join("wallet.local.bak").exists(),
+        "wallet.local.bak must not be created when login is refused"
+    );
+    Ok(())
+}
+
+#[test]
+fn cdp_login_failed_auth_preserves_existing_local_backup() -> TestResult {
+    let sb = Sandbox::new("cdp_login_keep_bak");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+    let original_wallet = fs::read_to_string(sb.wallet_file())?;
+    let bak_path = sb.home.join("wallet.local.bak");
+    let sentinel = r#"{"sentinel":"previous-local-backup"}"#;
+    fs::write(&bak_path, sentinel)?;
+
+    let out = Command::new(env!("CARGO_BIN_EXE_cae"))
+        .args(["wallet", "login", "--force", "--no-browser", "--json"])
+        .env("CAE_HOME", &sb.home)
+        .env_remove("CAE_CDP_AUTH_URL")
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    assert!(!out.status.success());
+    assert_eq!(fs::read_to_string(&bak_path)?, sentinel);
+    assert_eq!(fs::read_to_string(sb.wallet_file())?, original_wallet);
+    Ok(())
+}
+
+#[test]
+fn cdp_init_force_failed_auth_preserves_existing_backup() -> TestResult {
+    let sb = Sandbox::new("cdp_init_keep_bak");
+    assert!(sb.cae(&["init", "--local"]).status.success());
+    let original_wallet = fs::read_to_string(sb.wallet_file())?;
+    let bak_path = sb.home.join("wallet.json.bak");
+    let sentinel = r#"{"sentinel":"previous-json-backup"}"#;
+    fs::write(&bak_path, sentinel)?;
+
+    let out = Command::new(env!("CARGO_BIN_EXE_cae"))
+        .args(["wallet", "init", "--force", "--no-browser", "--json"])
+        .env("CAE_HOME", &sb.home)
+        .env_remove("CAE_CDP_AUTH_URL")
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    assert!(!out.status.success());
+    assert_eq!(fs::read_to_string(&bak_path)?, sentinel);
+    assert_eq!(fs::read_to_string(sb.wallet_file())?, original_wallet);
     Ok(())
 }
